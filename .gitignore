@@ -10,3 +10,4 @@ my_example.py
 *.egg-info
 *.pkl
 *.ai
+raw_data/

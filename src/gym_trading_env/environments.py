@@ -243,7 +243,7 @@ class TradingEnv(gym.Env):
 
         done, truncated = False, False
 
-        if portfolio_value <= 0:
+        if (portfolio_value / self.portfolio_initial_value) <= 0.7:
             done = True
         if self._idx >= len(self.df) - 1:
             truncated = True

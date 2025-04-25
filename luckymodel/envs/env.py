@@ -76,7 +76,7 @@ def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
           reward_function = reward_function,
           # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
           portfolio_initial_value = 1000000, # in FIAT (here, USD)
-          max_episode_duration = 500 , # "max" ,# 500,
+          max_episode_duration = 1 , # "max" ,# 500,
           disable_env_checker= True
       )
 
@@ -102,12 +102,12 @@ if __name__ == "__main__":
   
   args = parser.parse_args()
   symbol = args.symbol  
-  done, truncated = False, False
-  env = make_env(symbol,eval=False)
-  observation, info = env.reset()
   for _ in range(1):
-    # while not done or not truncated:
-    while not truncated :
+    done, truncated = False, False
+    env = make_env(symbol,eval=False)
+    observation, info = env.reset()
+    while not done or not truncated:
+    # while not truncated :
         action = env.action_space.sample()
         observation, reward, done, truncated, info = env.step(action)
         # print(observation,info)

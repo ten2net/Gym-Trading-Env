@@ -160,7 +160,23 @@ class TradingEnv(gym.Env):
         self._idx += 1
         self._step += 1
         
-        # 处理自然日更新（移除了利息计算）
+        # 检查是否超出数据范围
+        if self._idx >= len(self.df):
+            # 触发截断并恢复索引
+            done = True
+            truncated = True
+            self._idx -= 1  # 恢复到有效索引
+            self._step -= 1
+            # 更新历史记录以反映最后一次交易
+            self._update_history()
+            reward = 0
+            if self.verbose:
+                print(f"Episode truncated due to exceeding data bounds at step {self._step}.")
+            # 记录最终指标
+            self._log_metrics()
+            return self._get_obs(), reward, done, truncated, self.historical_info[-1]
+        
+        # 处理自然日更新
         if self._is_new_day():
             self._portfolio.update_day()
         

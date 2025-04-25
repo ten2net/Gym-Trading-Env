@@ -55,7 +55,7 @@ def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
     df['feature_volume_sum'] = (df['cum_volume'] - df['cum_volume_prev']) / (df['cum_volume'] + df['cum_volume_prev'])
     df['feature_volume'] = (df['volume'] - df['volume_prev']) / (df['volume'] + df['volume_prev'])
     df = df.drop(columns=['dt','daily_open', 'volume_prev', 'cum_volume', 'cum_volume_prev'])
-    print(df[-50:])
+    # print(df[-50:])
     fe =FeatureEngineer(window_size=3)
     df = fe.compute_features(df)
     numeric_cols = df.columns
@@ -77,19 +77,19 @@ def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
           reward_function = reward_function,
           # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
           portfolio_initial_value = 1000000, # in FIAT (here, USD)
-          max_episode_duration = 2000 , # "max" ,# 500,
+          max_episode_duration = 500 , # "max" ,# 500,
           disable_env_checker= True
       )
 
     # env.add_metric('Position Changes', lambda history : np.sum(np.diff(history['position']) != 0) )
     # env.add_metric('Episode Lenght', lambda history : len(history['position']) )
-    env.add_metric('Reward sum', lambda history : f"{np.sum(history["reward"]):.3f}")
-    env.add_metric('Reward svg', lambda history : f"{np.sum(history["reward"]) / len(history['position']):.4f}") 
+    # env.add_metric('Reward sum', lambda history : f"{np.sum(history["reward"]):.3f}")
+    # env.add_metric('Reward svg', lambda history : f"{np.sum(history["reward"]) / len(history['position']):.4f}") 
     env.add_metric('valuation', lambda history : f"{history['portfolio_valuation',-1]:.1f}") 
     # env.add_metric('pos_index', lambda history : f"{history['position_index',-1]}") 
     # env.add_metric('pos', lambda history : f"{history['position',-1]}") 
-    # env.add_metric('asset', lambda history : f"{history['portfolio_distribution_asset',-1]:.1f}") 
-    # env.add_metric('fiat', lambda history : f"{history['portfolio_distribution_fiat',-1]:.1f}") 
+    env.add_metric('asset', lambda history : f"{history['portfolio_distribution_asset',-1]:.1f}") 
+    env.add_metric('fiat', lambda history : f"{history['portfolio_distribution_fiat',-1]:.1f}") 
 
     
     eval_env = Monitor(env, './eval_logs')  
@@ -106,11 +106,12 @@ if __name__ == "__main__":
   done, truncated = False, False
   env = make_env(symbol,eval=False)
   observation, info = env.reset()
-
-  while not done and not truncated:
-      action = env.action_space.sample()
-      observation, reward, done, truncated, info = env.step(action)
-      # print(observation,info)
-      # print(env._features_columns)
+  for _ in range(1):
+    # while not done or not truncated:
+    while not truncated :
+        action = env.action_space.sample()
+        observation, reward, done, truncated, info = env.step(action)
+        # print(observation,info)
+        # print(env._features_columns)
   # Save for render
   # env.save_for_render()  

@@ -11,3 +11,4 @@ my_example.py
 *.pkl
 *.ai
 raw_data/
+*.csv

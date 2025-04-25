@@ -25,7 +25,7 @@ def dynamic_feature_real_position(history):
     return history['real_position', -1]
 
 def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
-    df = pd.read_csv(f"../../../raw_data/csv/m5/{symbol}.csv", parse_dates=["date"], index_col= "date")
+    df = pd.read_csv(f"../raw_data/csv/m5/{symbol}.csv", parse_dates=["date"], index_col= "date")
     df.sort_index(inplace= True)
     df.dropna(inplace= True)
     df.drop_duplicates(inplace=True)

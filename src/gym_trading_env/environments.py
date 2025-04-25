@@ -175,6 +175,8 @@ class TradingEnv(gym.Env):
                 low = self._idx, 
                 high = len(self.df) - self.max_episode_duration - self._idx
             )
+        # 为了跟踪日期变化，添加一个current_date属性,模拟T+1
+        self.current_date = self.df.index.date[self._idx]
         
         self._portfolio  = TargetPortfolio(
             position = self._position,
@@ -238,17 +240,29 @@ class TradingEnv(gym.Env):
         self._take_action_order_limit()
         price = self._get_price()
         self._portfolio.update_interest(borrow_interest_rate= self.borrow_interest_rate)
-        portfolio_value = self._portfolio.valorisation(price)
-        portfolio_distribution = self._portfolio.get_portfolio_distribution()
-
+        
         done, truncated = False, False
-
-        if (portfolio_value / self.portfolio_initial_value) <= 0.7:
-            done = True
         if self._idx >= len(self.df) - 1:
             truncated = True
         if isinstance(self.max_episode_duration,int) and self._step >= self.max_episode_duration - 1:
-            truncated = True
+            truncated = True         
+        # 检测日期是否变化
+        try:
+            next_date = self.df.index.date[self._idx + 1]
+        except IndexError:
+            next_date = None
+        print(f" {self._idx} {self._step} {self.current_date} {next_date}")
+        if truncated or next_date is None or next_date != self.current_date:
+            # 当前时间步是自然日的最后一个，调用update_day
+            self._portfolio.update_day(self.borrow_interest_rate)
+            print(f"---- {self._idx} {self._step} {self.current_date} {next_date}")
+            self.current_date = next_date  # 更新日期          
+        portfolio_value = self._portfolio.valorisation(price)
+        portfolio_distribution = self._portfolio.get_portfolio_distribution()
+
+
+        if (portfolio_value / self.portfolio_initial_value) <= 0.4:
+            done = True
 
         self.historical_info.add(
             idx = self._idx,

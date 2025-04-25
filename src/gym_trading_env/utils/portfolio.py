@@ -4,8 +4,10 @@ class Portfolio:
         self.fiat =fiat
         self.interest_asset = interest_asset
         self.interest_fiat = interest_fiat
+        self.next_day_available_asset = 0  # 新增：下一个交易日可用的资产
     def valorisation(self, price):
         return sum([
+            self.next_day_available_asset * price,
             self.asset * price,
             self.fiat,
             - self.interest_asset * price,
@@ -34,16 +36,24 @@ class Portfolio:
         if asset_trade > 0:
             asset_trade = asset_trade / (1 - trading_fees + trading_fees * position)
             asset_fiat = - asset_trade * price
-            self.asset = self.asset + asset_trade * (1 - trading_fees)
+            # self.asset = self.asset + asset_trade * (1 - trading_fees)
             self.fiat = self.fiat + asset_fiat
+            self.next_day_available_asset += self.next_day_available_asset + asset_trade * (1 - trading_fees)
         else:
-            asset_trade = asset_trade / (1 - trading_fees * position)
+            available_asset_to_sell = min(-asset_trade, self.asset)
+            asset_trade = available_asset_to_sell  / (1 - trading_fees * position)
+            # asset_trade = asset_trade / (1 - trading_fees * position)
             asset_fiat = - asset_trade * price
-            self.asset = self.asset + asset_trade 
+            self.asset -= self.asset - available_asset_to_sell 
             self.fiat = self.fiat + asset_fiat * (1 - trading_fees)
     def update_interest(self, borrow_interest_rate):
         self.interest_asset = max(0, - self.asset)*borrow_interest_rate
         self.interest_fiat = max(0, - self.fiat)*borrow_interest_rate
+    def update_day(self, borrow_interest_rate):
+        # 在每个交易日结束时调用此方法
+        self.asset += self.next_day_available_asset  
+        self.next_day_available_asset = 0 
+        self.update_interest(borrow_interest_rate) 
     def __str__(self): return f"{self.__class__.__name__}({self.__dict__})"
     def describe(self, price): print("Value : ", self.valorisation(price), "Position : ", self.position(price))
     def get_portfolio_distribution(self):
@@ -54,6 +64,7 @@ class Portfolio:
             "borrowed_fiat":max(0, -self.fiat),
             "interest_asset":self.interest_asset,
             "interest_fiat":self.interest_fiat,
+            "next_day_available_asset": self.next_day_available_asset,  # 新增
         }
 
 class TargetPortfolio(Portfolio):

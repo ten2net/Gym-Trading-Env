@@ -73,7 +73,6 @@ def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
           positions = [0, 0.5, 1], # From -1 (=SHORT), to +1 (=LONG)
           initial_position = 'random', #Initial position
           trading_fees = 0.01/100, # 0.01% per stock buy / sell
-          borrow_interest_rate= 0.0003/100, #per timestep (= 1h here)
           reward_function = reward_function,
           # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
           portfolio_initial_value = 1000000, # in FIAT (here, USD)

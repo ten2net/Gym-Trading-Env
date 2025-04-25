@@ -1,77 +1,75 @@
 class Portfolio:
-    def __init__(self, asset, fiat, interest_asset = 0, interest_fiat = 0):
-        self.asset =asset
-        self.fiat =fiat
-        self.interest_asset = interest_asset
-        self.interest_fiat = interest_fiat
-        self.next_day_available_asset = 0  # 新增：下一个交易日可用的资产
+    def __init__(self, asset, fiat):
+        self.asset = asset          # 可用资产
+        self.fiat = fiat           # 可用法币
+        self.next_day_available_asset = 0  # 下一个交易日可用的资产
+
     def valorisation(self, price):
-        return sum([
-            self.next_day_available_asset * price,
-            self.asset * price,
-            self.fiat,
-            - self.interest_asset * price,
-            - self.interest_fiat
-        ])
-    def real_position(self, price):
-        return (self.asset - self.interest_asset)* price / self.valorisation(price)
+        """计算当前投资组合的总价值"""
+        return self.asset * price + self.fiat + self.next_day_available_asset * price
+
     def position(self, price):
-        return self.asset * price / self.valorisation(price)
+        """计算当前仓位比例（基于可用资产）"""
+        total = self.valorisation(price)
+        return (self.asset * price) / total if total != 0 else 0
+
     def trade_to_position(self, position, price, trading_fees):
-        # Repay interest
-        current_position = self.position(price)
-        interest_reduction_ratio = 1
-        if (position <= 0 and current_position < 0):
-            interest_reduction_ratio = min(1, position/current_position)
-        elif (position >= 1 and current_position > 1):
-            interest_reduction_ratio = min(1, (position-1)/(current_position-1))
-        if interest_reduction_ratio < 1:
-            self.asset = self.asset - (1-interest_reduction_ratio) * self.interest_asset
-            self.fiat = self.fiat - (1-interest_reduction_ratio) * self.interest_fiat
-            self.interest_asset = interest_reduction_ratio * self.interest_asset
-            self.interest_fiat = interest_reduction_ratio * self.interest_fiat
-        
-        # Proceed to trade
-        asset_trade = (position * self.valorisation(price) / price - self.asset)
-        if asset_trade > 0:
-            asset_trade = asset_trade / (1 - trading_fees + trading_fees * position)
-            asset_fiat = - asset_trade * price
-            # self.asset = self.asset + asset_trade * (1 - trading_fees)
-            self.fiat = self.fiat + asset_fiat
-            self.next_day_available_asset += self.next_day_available_asset + asset_trade * (1 - trading_fees)
-        else:
-            available_asset_to_sell = min(-asset_trade, self.asset)
-            asset_trade = available_asset_to_sell  / (1 - trading_fees * position)
-            # asset_trade = asset_trade / (1 - trading_fees * position)
-            asset_fiat = - asset_trade * price
-            self.asset -= self.asset - available_asset_to_sell 
-            self.fiat = self.fiat + asset_fiat * (1 - trading_fees)
-    def update_interest(self, borrow_interest_rate):
-        self.interest_asset = max(0, - self.asset)*borrow_interest_rate
-        self.interest_fiat = max(0, - self.fiat)*borrow_interest_rate
-    def update_day(self, borrow_interest_rate):
-        # 在每个交易日结束时调用此方法
-        self.asset += self.next_day_available_asset  
-        self.next_day_available_asset = 0 
-        self.update_interest(borrow_interest_rate) 
-    def __str__(self): return f"{self.__class__.__name__}({self.__dict__})"
-    def describe(self, price): print("Value : ", self.valorisation(price), "Position : ", self.position(price))
+        """调整到目标仓位（0-1之间），考虑交易手续费"""
+        if position < 0 or position > 1:
+            raise ValueError("Position must be between 0 and 1")
+
+        current_value = self.valorisation(price)
+        if current_value <= 0:
+            return  # 无资金时不操作
+
+        # 计算目标资产数量
+        target_asset = (position * current_value) / price
+        asset_trade = target_asset - self.asset
+
+        if asset_trade > 0:  # 买入操作
+            # 计算需要的法币（考虑手续费）
+            required_fiat = (asset_trade * price) / (1 - trading_fees)
+            if required_fiat > self.fiat:  # 资金不足时按最大可买量调整
+                asset_trade = (self.fiat * (1 - trading_fees)) / price
+                required_fiat = self.fiat
+            
+            self.fiat -= required_fiat
+            self.next_day_available_asset += asset_trade  # 次日到账
+
+        elif asset_trade < 0:  # 卖出操作
+            sell_amount = -asset_trade
+            if sell_amount > self.asset:  # 超出持有量时按最大卖出
+                sell_amount = self.asset
+            
+            self.asset -= sell_amount
+            self.fiat += sell_amount * price * (1 - trading_fees)  # 立即到账
+
+    def update_day(self):
+        """每日结算，更新可用资产"""
+        self.asset += self.next_day_available_asset
+        self.next_day_available_asset = 0
+
     def get_portfolio_distribution(self):
+        """获取资产分布信息"""
         return {
-            "asset":max(0, self.asset),
-            "fiat":max(0, self.fiat),
-            "borrowed_asset":max(0, -self.asset),
-            "borrowed_fiat":max(0, -self.fiat),
-            "interest_asset":self.interest_asset,
-            "interest_fiat":self.interest_fiat,
-            "next_day_available_asset": self.next_day_available_asset,  # 新增
+            "asset": self.asset,
+            "fiat": self.fiat,
+            "next_day_available_asset": self.next_day_available_asset
         }
 
+    def __str__(self):
+        return f"Portfolio(asset={self.asset}, fiat={self.fiat}, next_day_available_asset={self.next_day_available_asset})"
+
+    def describe(self, price):
+        print(f"Value: {self.valorisation(price)}, Position: {self.position(price)}")
+
+
 class TargetPortfolio(Portfolio):
-    def __init__(self, position ,value, price):
+    """直接创建目标仓位的投资组合"""
+    def __init__(self, position, value, price):
+        if not 0 <= position <= 1:
+            raise ValueError("Position must be between 0 and 1")
         super().__init__(
-            asset = position * value / price,
-            fiat = (1-position) * value,
-            interest_asset = 0,
-            interest_fiat = 0
+            asset=(position * value) / price,
+            fiat=(1 - position) * value
         )

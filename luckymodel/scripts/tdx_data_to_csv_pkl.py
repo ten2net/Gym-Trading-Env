@@ -145,16 +145,16 @@ if __name__ == '__main__':
     # 初始化目录结构
     setup_directories(output_root)
     
-    # # 获取待处理文件列表
-    # file_patterns = ['*.day', '*.lc1', '*.lc5']
-    # data_files = []
-    # for pattern in file_patterns:
-    #     data_files.extend(source_dir.rglob(pattern))
+    # 获取待处理文件列表
+    file_patterns = ['*.day', '*.lc1', '*.lc5']
+    data_files = []
+    for pattern in file_patterns:
+        data_files.extend(source_dir.rglob(pattern))
     
-    # logger.info(f"发现 {len(data_files)} 个待处理文件")
+    logger.info(f"发现 {len(data_files)} 个待处理文件")
     
-    # # 处理每个数据文件
-    # for data_file in data_files:
-    #     process_data_file(data_file, output_root)
+    # 处理每个数据文件
+    for data_file in data_files:
+        process_data_file(data_file, output_root)
     
-    # logger.info("数据处理任务完成")
+    logger.info("数据处理任务完成")

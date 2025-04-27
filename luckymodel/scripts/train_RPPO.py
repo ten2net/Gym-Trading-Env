@@ -1,14 +1,15 @@
+import sys
+sys.path.append("../")
+from envs.env import make_env
 import warnings
+
 # from gym_trading_env.environments import TradingEnv
-from env import make_env
+# from env import make_env
 from stable_baselines3.common.utils import get_schedule_fn
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import EvalCallback
 import numpy as np
 import argparse
-import sys
-import os
-sys.path.append("./src")
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
 
@@ -56,7 +57,7 @@ def train(symbol_train: str, symbol_eval: str,window_size:int|None =12):
     )
 
     model.learn(
-        total_timesteps=5e6,
+        total_timesteps=2  e6,
         progress_bar=False,
         log_interval=10,
         tb_log_name=f"ppo_example",

@@ -71,13 +71,15 @@ def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
           windows= window_size,
         #   positions = [ -1, -0.5, 0, 0.5, 1, 1.5, 2], # From -1 (=SHORT), to +1 (=LONG)
           positions = [0, 0.5, 1], # From -1 (=SHORT), to +1 (=LONG)
-          initial_position = 'random', #Initial position
+          initial_position = 0, # 'random', #Initial position
           trading_fees = 0.01/100, # 0.01% per stock buy / sell
           reward_function = reward_function,
           # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
           portfolio_initial_value = 1000000, # in FIAT (here, USD)
-          max_episode_duration = 1 , # "max" ,# 500,
-          disable_env_checker= True
+          max_episode_duration = 500 , # "max" ,# 500,
+          disable_env_checker= True,
+          render_mode="logs",
+          verbose=1          
       )
 
     # env.add_metric('Position Changes', lambda history : np.sum(np.diff(history['position']) != 0) )
@@ -107,7 +109,7 @@ if __name__ == "__main__":
     env = make_env(symbol,eval=False)
     observation, info = env.reset()
     while not done or not truncated:
-    # while not truncated :
+    # for _ in range(50):
         action = env.action_space.sample()
         observation, reward, done, truncated, info = env.step(action)
         # print(observation,info)

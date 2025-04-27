@@ -57,7 +57,7 @@ def train(symbol_train: str, symbol_eval: str,window_size:int|None =12):
     )
 
     model.learn(
-        total_timesteps=2  e6,
+        total_timesteps=2e6,
         progress_bar=False,
         log_interval=10,
         tb_log_name=f"ppo_example",

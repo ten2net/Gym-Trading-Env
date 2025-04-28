@@ -13,7 +13,7 @@ import argparse
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
 
-def train(symbol_train: str, symbol_eval: str,window_size:int|None =12):
+def train(symbol_train: str, symbol_eval: str,window_size:int|None =6):
     train_env = make_env(symbol_train, window_size=window_size, eval=False)
     eval_env = make_env(symbol_eval, window_size=window_size, eval=True)
     # 使用PPO算法训练模型
@@ -79,6 +79,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     symbol_train = args.symbol_train
     symbol_eval = args.symbol_eval
-    model = train(symbol_train, symbol_eval, window_size=12)
+    model = train(symbol_train, symbol_eval, window_size=6)
     # 保存模型
     model.save("ppo_trading_model")

@@ -29,13 +29,13 @@ class TradingEnv(gym.Env):
                  df: pd.DataFrame,
                  positions: list = [0, 1],
                  dynamic_feature_functions=[
-                     dynamic_feature_last_position_taken, dynamic_feature_real_position],
+                      dynamic_feature_real_position],
                  reward_function=basic_reward_function,
                  windows=None,
                  trading_fees=0,
                  portfolio_initial_value=1000000,
                  initial_position='random',
-                 max_episode_duration='max',
+                 max_episode_duration= 'max',
                  name="Stock",
                  render_mode="logs",
                  verbose=1
@@ -73,7 +73,7 @@ class TradingEnv(gym.Env):
                 np.inf,
                 shape=[self.windows, self._nb_features]
             )
-
+        self.epid = 0
         self.log_metrics = []
 
     def _set_df(self, df):
@@ -106,12 +106,13 @@ class TradingEnv(gym.Env):
             self._obs_array[self._idx, self._nb_static_features +
                             i] = func(self.historical_info)
 
-        return self._obs_array[self._idx - self.windows + 1: self._idx + 1] if self.windows else self._obs_array[self._idx]
+        return self._obs_array[self._idx - self.windows + 1: self._idx +1 ] if self.windows else self._obs_array[self._idx]
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
         # 初始化状态
+        self.epid += 1
         self._step = 0
         self._position = (np.random.choice(self.positions)
                           if self.initial_position == 'random'
@@ -124,7 +125,6 @@ class TradingEnv(gym.Env):
                 self._idx,
                 len(self.df) - self.max_episode_duration
             )
-
         # 初始化投资组合
         self._portfolio = TargetPortfolio(
             position=self._position,
@@ -137,6 +137,8 @@ class TradingEnv(gym.Env):
             "fiat": 0.0,
             "next_day_available_asset": 0.0
         }
+        
+        self.current_reward = 0
 
         # 初始化历史记录
         self.historical_info = History(max_size=len(self.df))
@@ -150,17 +152,17 @@ class TradingEnv(gym.Env):
             data=dict(zip(self._info_columns, self._info_array[self._idx])),
             portfolio_valuation=self.portfolio_initial_value,
             portfolio_distribution=initial_distribution,  # 使用预定义结构
-            reward=0,
+            reward=self.current_reward,
         )
         self._update_history()
 
         return self._get_obs(), {}
 
     def step(self, action):
-        # 更新索引和日期
-        self._idx += 1
-        self._step += 1                  
-        if self._is_new_day():
+        prev_dt = self.df.index.date[self._idx -1]
+        curr_dt = self.df.index.date[self._idx ]
+        is_new_day = self._is_new_day()
+        if is_new_day :
             self._portfolio.update_day()  
         # 执行交易
         self._position = self.positions[action]
@@ -169,37 +171,64 @@ class TradingEnv(gym.Env):
             self._get_price(),
             self.trading_fees
         )
+        # 更新历史记录以反映最后一次交易
+        self._update_history()
+        # 更新索引和日期
+        self._idx += 1
+        self._step += 1   
+        terminated, truncated = False, False              
         # 检查是否超出数据范围
         if self._idx >= len(self.df) -1:
-            # 触发截断并恢复索引
-            done = True
+            self._idx -= 1
             truncated = True
-            # 更新历史记录以反映最后一次交易
-            self._update_history()
-            reward = 0
+            self.current_reward = 0
             if self.verbose:
                 print(
-                    f"Episode truncated due to exceeding data bounds at step {self._step}.")
+                    f"回合​​截断（到达数据尾部) step {self._step}.")           
             # 记录最终指标
             self._log_metrics()
-            return self._get_obs(), reward, done, truncated, self.historical_info[-1]
-
+            return self._get_obs(), self.current_reward, terminated, truncated, self.historical_info[-1]
+        # 计算基本探索奖励
+        reward = self.reward_function(self.historical_info)
         # 检查终止条件
-        done = self._check_bankruptcy()
-        truncated = self._check_truncation()
-
-        # 更新历史记录
-        self._update_history()
-
-        # 计算奖励
-        reward = 0 if done else self.reward_function(self.historical_info)
+        portfolio_value = self._portfolio.valorisation(self._get_price())
+        portfolio_return =portfolio_value / self.portfolio_initial_value
+        if portfolio_return <= 0.25:
+           terminated = True
+           reward -= 10
+        elif portfolio_return <= 0.5: 
+           terminated = True
+           reward -= 5            
+        elif portfolio_return <= 0.75: 
+           terminated = True
+           reward -= 2.5            
+        elif portfolio_return >= 1.5: 
+           terminated = True
+           reward += 24            
+        elif portfolio_return >= 1.25: 
+           terminated = True
+           reward += 16            
+        elif portfolio_return >= 1.1: 
+           terminated = True
+           reward += 8           
+        if terminated:
+            if self.verbose:
+                print(
+                    f"回合完成。 step {self._step}，奖励：{reward:.4f}")
+        truncated = self._check_truncation() #  当前时间步长超过最大时间步长 或 到达数据末尾
+        if truncated:
+            terminated = True
+            self.current_reward = 0
+            if self.verbose:
+                print(
+                    f"回合​​截断（达到最大时间步数或到达数据尾部) step {self._step}，奖励：{reward:.4f}")
 
         # 记录最终指标
-        if done or truncated:
+        if terminated or truncated:
             self._log_metrics()
-
-        # print(f"{self._step} {self._is_new_day()} {action} {self._position} {self._get_price()} {self._portfolio.valorisation(self._get_price()):.0f}, {self._portfolio.asset:.0f}, {self._portfolio.fiat:.2f},{self._portfolio.next_day_available_asset:.0f}")
-        return self._get_obs(), reward, done, truncated, self.historical_info[-1]
+        self.current_reward = reward
+        # print(f"{self.epid} {self._step} {is_new_day} {prev_dt} {curr_dt} {self._position:.1f}  {self._portfolio.position(self._get_price()):.1f} {self._get_price()}   ,{self._portfolio.next_day_available_asset:.0f},            {self._portfolio.asset:.0f},  {self._portfolio.fiat:.2f}      {self._portfolio.valorisation(self._get_price()):.2f}")
+        return self._get_obs(), self.current_reward, terminated, truncated, self.historical_info[-1]
 
     def _log_metrics(self):
         self.calculate_metrics()
@@ -240,7 +269,7 @@ class TradingEnv(gym.Env):
             data=dict(zip(self._info_columns, self._info_array[self._idx])),
             portfolio_valuation=self._portfolio.valorisation(price),
             portfolio_distribution=portfolio_dist,
-            reward=0
+            reward=self.current_reward
         )
 
     # 保留指标计算方法

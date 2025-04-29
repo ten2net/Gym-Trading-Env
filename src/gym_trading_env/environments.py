@@ -10,9 +10,20 @@ from .utils.history import History
 from .utils.portfolio import Portfolio, TargetPortfolio
 
 
-def basic_reward_function(history: History):
-    return np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
-
+def basic_reward_function(history: History,step: int = 0,lambda_param: float = 0.1, eta: float = 0.5):
+    R_t =np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
+# def exp_reward_function(history: History,step: int = 0,lambda_param: float = 0.1, eta: float = 0.5):
+#     R_t =100 * np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
+#     # 时间衰减因子
+#     time_decay = np.exp(-lambda_param * step)    
+#     # 非对称风险惩罚
+#     if R_t < 0:
+#         penalty = np.exp(eta * abs(R_t)) - 1
+#     else:
+#         penalty = 0    
+#     # 总奖励 = 收益率 * 衰减因子 - 风险惩罚
+#     reward = R_t * time_decay - penalty
+#     return reward
 
 def dynamic_feature_last_position_taken(history):
     return history['position', -1]
@@ -31,6 +42,8 @@ class TradingEnv(gym.Env):
                  dynamic_feature_functions=[
                       dynamic_feature_real_position],
                  reward_function=basic_reward_function,
+                 lambda_param: float = 0.1, 
+                 eta: float = 0.5,
                  windows=None,
                  trading_fees=0,
                  portfolio_initial_value=1000000,
@@ -75,6 +88,10 @@ class TradingEnv(gym.Env):
             )
         self.epid = 0
         self.log_metrics = []
+        
+        # 奖励函数参数
+        self.lambda_param = lambda_param  # 时间衰减系数
+        self.eta = eta                    # 风险惩罚系数        
 
     def _set_df(self, df):
         df = df.copy()
@@ -173,6 +190,10 @@ class TradingEnv(gym.Env):
         )
         # 更新历史记录以反映最后一次交易
         self._update_history()
+        
+        # 计算基本探索奖励
+        reward = self.reward_function(self.historical_info)
+               
         # 更新索引和日期
         self._idx += 1
         self._step += 1   
@@ -181,44 +202,30 @@ class TradingEnv(gym.Env):
         if self._idx >= len(self.df) -1:
             self._idx -= 1
             truncated = True
-            self.current_reward = 0
+            reward += self.episode_reward_function(lambda_param = 0.1, eta = 0.5)  
+            self.current_reward = reward
             if self.verbose:
                 print(
                     f"回合​​截断（到达数据尾部) step {self._step}.")           
             # 记录最终指标
             self._log_metrics()
             return self._get_obs(), self.current_reward, terminated, truncated, self.historical_info[-1]
-        # 计算基本探索奖励
-        reward = self.reward_function(self.historical_info)
+
         # 检查终止条件
         portfolio_value = self._portfolio.valorisation(self._get_price())
-        portfolio_return =portfolio_value / self.portfolio_initial_value
-        if portfolio_return <= 0.25:
+        portfolio_return =portfolio_value  /self.portfolio_initial_value
+        if abs(portfolio_return - 1) >= 0.15 :
            terminated = True
-           reward -= 10
-        elif portfolio_return <= 0.5: 
-           terminated = True
-           reward -= 5            
-        elif portfolio_return <= 0.75: 
-           terminated = True
-           reward -= 2.5            
-        elif portfolio_return >= 1.5: 
-           terminated = True
-           reward += 24            
-        elif portfolio_return >= 1.25: 
-           terminated = True
-           reward += 16            
-        elif portfolio_return >= 1.1: 
-           terminated = True
-           reward += 8           
+           reward += self.episode_reward_function(lambda_param = 0.1, eta = 0.5)            
+          
         if terminated:
+            reward += self.episode_reward_function(lambda_param = 0.1, eta = 0.5)   
             if self.verbose:
                 print(
                     f"回合完成。 step {self._step}，奖励：{reward:.4f}")
         truncated = self._check_truncation() #  当前时间步长超过最大时间步长 或 到达数据末尾
         if truncated:
             terminated = True
-            self.current_reward = 0
             if self.verbose:
                 print(
                     f"回合​​截断（达到最大时间步数或到达数据尾部) step {self._step}，奖励：{reward:.4f}")
@@ -229,6 +236,45 @@ class TradingEnv(gym.Env):
         self.current_reward = reward
         # print(f"{self.epid} {self._step} {is_new_day} {prev_dt} {curr_dt} {self._position:.1f}  {self._portfolio.position(self._get_price()):.1f} {self._get_price()}   ,{self._portfolio.next_day_available_asset:.0f},            {self._portfolio.asset:.0f},  {self._portfolio.fiat:.2f}      {self._portfolio.valorisation(self._get_price()):.2f}")
         return self._get_obs(), self.current_reward, terminated, truncated, self.historical_info[-1]
+ 
+    def episode_reward_function(self,lambda_param: float = 0.1, eta: float = 0.5):
+        R_t = (self.historical_info['portfolio_valuation', -1] - self.portfolio_initial_value) / self.portfolio_initial_value #log (p_t / p_t-1 )
+        # 时间衰减因子
+        time_decay = np.exp(-lambda_param * self._step)    
+        # 非对称风险惩罚
+        if R_t < 0:
+            penalty = np.exp(eta * abs(R_t)) - 1
+        else:
+            penalty = 0    
+        # 总奖励 = 收益率 * 衰减因子 - 风险惩罚
+        reward = 100 * (R_t * time_decay - penalty)
+        return reward      
+    def nonlinear_reward(self,portfolio_return, 
+                        base_return=1.01, 
+                        alpha=2.0, 
+                        beta=3.0, 
+                        gamma=0.5,
+                        max_clip=20.0):
+        """
+        非对称指数奖励函数
+        :param portfolio_return: 投资组合收益率（相对于初始值）
+        :param base_return: 基准收益率阈值（例如1.0表示保本）
+        :param alpha: 正向收益放大系数
+        :param beta: 负向风险惩罚系数
+        :param gamma: 收益饱和系数（控制高收益区间的奖励增长速度）
+        :param max_clip: 奖励最大值截断（防止数值溢出）
+        """
+        excess_return = portfolio_return - base_return
+        
+        if excess_return >= 0:
+            # 正向收益：使用修正指数函数控制增长
+            reward = np.sign(excess_return) * (np.abs(excess_return)**gamma) * alpha
+        else:
+            # 负向亏损：使用指数惩罚
+            reward = -np.exp(beta * np.abs(excess_return)) + 1
+        
+        # 数值截断
+        return np.clip(reward, -max_clip, max_clip)    
 
     def _log_metrics(self):
         self.calculate_metrics()

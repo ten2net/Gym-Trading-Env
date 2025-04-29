@@ -17,6 +17,34 @@ def reward_function(history):
     log_return = 100 * np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])  #log (p_t / p_t-1 )
     return np.clip(log_return, -0.5,0.5) 
     # return max(0,(history["portfolio_valuation", -1] -history["portfolio_valuation", -2] )/ history["portfolio_valuation", -2])
+ 
+def one_step_reward(history, 
+                    alpha=2.0, 
+                    beta=3.0, 
+                    gamma=0.5,
+                    max_clip=5.0):
+    """
+    非对称指数奖励函数
+    :param portfolio_return: 投资组合收益率（相对于初始值）
+    :param base_return: 基准收益率阈值（例如1.0表示保本）
+    :param alpha: 正向收益放大系数
+    :param beta: 负向风险惩罚系数
+    :param gamma: 收益饱和系数（控制高收益区间的奖励增长速度）
+    :param max_clip: 奖励最大值截断（防止数值溢出）
+    """
+   
+    excess_return = 100 * np.log(history["portfolio_valuation", -1] / history["portfolio_valuation", -2])
+    
+    if excess_return >= 0:
+        # 正向收益：使用修正指数函数控制增长
+        reward = np.sign(excess_return) * (np.abs(excess_return)**gamma) * alpha
+    else:
+        # 负向亏损：使用指数惩罚
+        reward = -np.exp(beta * np.abs(excess_return)) + 1
+    
+    # 数值截断
+    return np.clip(reward, -max_clip, max_clip)   
+  
 
 def dynamic_feature_last_position_taken(history):
     return history['position', -1]
@@ -73,7 +101,7 @@ def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
           positions = [0, 0.5, 1], # From -1 (=SHORT), to +1 (=LONG)
           initial_position = 0, # 'random', #Initial position
           trading_fees = 0.01/100, # 0.01% per stock buy / sell
-          reward_function = reward_function,
+          reward_function = one_step_reward, #reward_function,
           # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
           portfolio_initial_value = 1000000, # in FIAT (here, USD)
           max_episode_duration = 48 * 5 * 4 + 2 , # "max" ,# 500,  

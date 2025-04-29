@@ -60,7 +60,7 @@ def train(symbol_train: str, symbol_eval: str,window_size:int|None =6):
         total_timesteps=2e6,
         progress_bar=False,
         log_interval=10,
-        tb_log_name=f"ppo_example",
+        tb_log_name=f"nonlinear_reward_V2",
         callback=[eval_callback],
         reset_num_timesteps=True
     )

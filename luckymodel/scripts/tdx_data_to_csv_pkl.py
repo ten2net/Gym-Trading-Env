@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def validate_symbol(symbol: str) -> bool:
     """验证股票代码是否符合处理规则"""
-    valid_prefix = symbol.startswith(('6', '3'))  # 沪市或深市
+    valid_prefix = symbol.startswith(('6', '3', '0'))  # 沪市或深市
     reject_prefix = symbol.startswith('68')        # 排除科创板
     return valid_prefix and not reject_prefix
 

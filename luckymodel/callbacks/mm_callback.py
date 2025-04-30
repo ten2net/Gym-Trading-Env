@@ -27,7 +27,7 @@ class MultiMetricCallback(BaseCallback):
         metric_dict = {}
         for name, func in self.metrics:
             try:
-                metric_dict[name] = func(self.training_env.historical_info)
+                metric_dict[name] = func(self.training_env.history)
             except Exception as e:
                 print(f"计算指标 {name} 失败: {str(e)}")
                 metric_dict[name] = None

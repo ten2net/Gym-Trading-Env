@@ -1,21 +1,55 @@
 import sys
+sys.path.append("../")
+import datetime
+import argparse
+import numpy as np
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
+from stable_baselines3.common.callbacks import StopTrainingOnNoModelImprovement, ProgressBarCallback
+
+from sb3_contrib import RecurrentPPO
+from stable_baselines3.common.utils import get_schedule_fn
+import warnings
+from envs.env import make_env
+import torch
 
 sys.path.append("../")
-from envs.env import make_env
-import warnings
 
-from stable_baselines3.common.utils import get_schedule_fn
-from sb3_contrib import RecurrentPPO
-from stable_baselines3.common.callbacks import EvalCallback
-import numpy as np
-import argparse
-from callbacks.mm_callback import MultiMetricCallback
 warnings.filterwarnings("ignore", category=ResourceWarning)
+warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
 
 
-def train(symbol_train: str, symbol_eval: str,window_size:int|None =6):
-    train_env = make_env(symbol_train, window_size=window_size, eval=False)
-    eval_env = make_env(symbol_eval, window_size=window_size, eval=True)
+def train(symbol_train: str,
+          symbol_eval: str,
+          window_size: int | None = 15,
+          target_return: float = 0.3,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = 0.05  # 最小目标收益率，低于视为失败，给予惩罚
+          ):
+    # 定义公共环境参数
+    common_env_params = {
+        'window_size': window_size,
+        'eval': False,
+        'positions': [0, 0.5, 1],
+        'trading_fees': 0.01/100,
+        'portfolio_initial_value': 1000000.0,
+        'max_episode_duration': 48 * 22,
+        'target_return': target_return,
+        'min_target_return': min_target_return,
+        'max_drawdown': -0.3,
+        'daily_loss_limit': -0.1,
+        'render_mode': "logs",
+        'verbose': 1
+    }
+    # 创建训练环境（可添加训练特有的参数）
+    train_env = make_env(
+        symbol=symbol_train,
+        **common_env_params
+    )
+
+    # 创建评估环境（可添加评估特有的参数）
+    eval_env = make_env(
+        symbol=symbol_eval,
+        **{**common_env_params, 'max_drawdown': -0.2}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
+    )
     # 使用PPO算法训练模型
     initial_lr = 5e-5
     final_lr = 1e-6
@@ -34,6 +68,8 @@ def train(symbol_train: str, symbol_eval: str,window_size:int|None =6):
         enable_critic_lstm=False,  # 关闭Critic的LSTM
         # optimizer_kwargs=dict(weight_decay=1e-4)
     )
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print("torch.cuda.is_available()=", torch.cuda.is_available())
     model = RecurrentPPO(
         "MlpLstmPolicy",
         train_env,
@@ -43,35 +79,34 @@ def train(symbol_train: str, symbol_eval: str,window_size:int|None =6):
         gamma=0.995,  # 延长收益视野
         ent_coef=0.05,  # 初始高探索
         verbose=0,
-        device='cpu',
+        device=device,
         seed=42,
         tensorboard_log=f"../logs/stock_trading2/")
     # 评估回调
+    early_stop_callback = StopTrainingOnNoModelImprovement(
+        max_no_improvement_evals=100,  # 允许的连续无提升评估次数
+        min_evals=5,                  # 最少评估次数后才开始检查
+        verbose=1                     # 是否打印日志
+    )
     eval_callback = EvalCallback(
         eval_env=eval_env,
+        callback_on_new_best=early_stop_callback,  # 绑定早停回调
         best_model_save_path="../checkpoints/best_models/",
-        eval_freq=2048,
+        eval_freq=48 * 22,
         n_eval_episodes=10,
         verbose=0,
-        deterministic=True
+        deterministic=True,
+        render=False
     )
-    
-    mm_callback = MultiMetricCallback(
-        metrics=[
-            ('daily_return', lambda h: h['daily_return'][-1]),
-            ('max_drawdown', lambda h: (h['portfolio_valuation'].max() - h['portfolio_valuation'][-1])/h['portfolio_valuation'].max()),
-            ('target_achieved', lambda h: 1 if h['portfolio_valuation'][-1]/h['portfolio_valuation'][0] >=1.15 else 0)
-        ],
-        check_freq=1000,  # 每1000步记录一次
-        log_dir="./logs/"        
-    )    
+    progressBarCallback = ProgressBarCallback()
 
     model.learn(
         total_timesteps=2e6,
         progress_bar=False,
         log_interval=10,
-        tb_log_name=f"nonlinear_reward_V2",
-        callback=[eval_callback,mm_callback],
+        tb_log_name=f"new_reward",
+        callback=[eval_callback,
+                  progressBarCallback],
         reset_num_timesteps=True
     )
     print("训练时间步数=", model.num_timesteps)
@@ -86,9 +121,16 @@ if __name__ == "__main__":
     parser.add_argument('--symbol_eval', type=str, default='300308',
                         help='评估使用的股票代码')
 
+    parser.add_argument('--window_size', type=int, default=15)
+    parser.add_argument('--target_return', type=float, default=0.3)
+    parser.add_argument('--min_target_return', type=float, default=0.05)
+    parser.add_argument('--total_timesteps', type=int, default=2e6)
+
     args = parser.parse_args()
     symbol_train = args.symbol_train
     symbol_eval = args.symbol_eval
-    model = train(symbol_train, symbol_eval, window_size=6)
+    model = train(symbol_train, symbol_eval, window_size=15)
     # 保存模型
-    model.save("ppo_trading_model")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
+    model_save_path = f"rppo_trading_model_{timestamp}"
+    model.save(model_save_path)

@@ -6,40 +6,75 @@
 3. 生成评估报告
 4. 可视化结果
 """
-
+import sys
+sys.path.append("../")
 import argparse
 import numpy as np
-from stable_baselines3 import PPO
-from utils.config_parser import load_config
-from data.loader.stock_loader import StockDataLoader
-from envs.trading_env import StockTradingEnv
-from evaluators.performance_analyzer import TradingMetricsCalculator
-from evaluators.visualization import plot_portfolio_values
+import matplotlib.pyplot as plt
+from sb3_contrib import RecurrentPPO
+from envs.env import make_env
 
+class TradingMetricsCalculator:
+    """金融指标计算工具类"""
+    
+    @staticmethod
+    def sharpe_ratio(returns):
+        """计算年化夏普比率（假设每日收益率）"""
+        if len(returns) < 2:
+            return 0.0
+        
+        returns = np.array(returns)
+        daily_returns = (returns[1:] - returns[:-1]) / returns[:-1]
+        
+        if np.std(daily_returns) == 0:
+            return 0.0
+            
+        return np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252)
+
+    @staticmethod
+    def max_drawdown(returns):
+        """计算最大回撤"""
+        if len(returns) == 0:
+            return 0.0
+            
+        peak = returns[0]
+        max_dd = 0.0
+        
+        for value in returns:
+            if value > peak:
+                peak = value
+            current_dd = (peak - value) / peak
+            if current_dd > max_dd:
+                max_dd = current_dd
+                
+        return max_dd
 
 def evaluate_model(env, model, num_episodes=10):
+    """模型评估主函数"""
+    
     all_returns = []
     metrics = []
 
     for _ in range(num_episodes):
-        obs = env.reset()
+        # 获取初始投资组合净值
+        obs, info = env.reset()
+        episode_returns = [1000000]
         done = False
-        episode_returns = []
 
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, info = env.step(action)
-            episode_returns.append(info[0]['portfolio_return'])
+            action, _ = model.predict(obs, deterministic=False)
+            obs, _, done, _, info = env.step(action)
+            episode_returns.append(info['portfolio_valuation'])
 
-        # 计算单次episode指标
+        # 计算各项指标
         metrics.append({
             'sharpe_ratio': TradingMetricsCalculator.sharpe_ratio(episode_returns),
             'max_drawdown': TradingMetricsCalculator.max_drawdown(episode_returns),
-            'total_return': np.prod([1 + r for r in episode_returns]) - 1
+            'total_return': (episode_returns[-1] - episode_returns[0]) / episode_returns[0]
         })
-        all_returns.extend(episode_returns)
+        all_returns.append(episode_returns)
 
-    # 汇总统计
+    # 汇总统计结果
     return {
         'mean_sharpe': np.mean([m['sharpe_ratio'] for m in metrics]),
         'max_drawdown': np.max([m['max_drawdown'] for m in metrics]),
@@ -47,42 +82,41 @@ def evaluate_model(env, model, num_episodes=10):
         'cumulative_returns': all_returns
     }
 
+def plot_portfolio_results(returns_list):
+    """绘制投资组合净值曲线"""
+    
+    plt.figure(figsize=(12, 6))
+    
+    for i, returns in enumerate(returns_list):
+        plt.plot(returns, label=f'Episode {i+1}')
+        
+    plt.title('Portfolio Valuation Over Time')
+    plt.xlabel('Time Steps')
+    plt.ylabel('Net Asset Value')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig("1.png")
 
-def main():
+if __name__ == "__main__":
+    # 参数解析
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', type=str, required=True,
-                        help='待评估模型路径')
-    parser.add_argument('--config', type=str, default='configs/eval_config.yml',
-                        help='评估配置文件路径')
+    parser.add_argument('--symbol', type=str, default='300301', help='评估使用的股票代码')
     args = parser.parse_args()
 
-    # 加载配置
-    config = load_config(args.config)
-    eval_config = config['evaluation']
-
-    # 加载数据
-    data_loader = StockDataLoader(eval_config['validation_data'])
-    eval_df = data_loader.load_data()
-
     # 创建评估环境
-    env = StockTradingEnv(eval_df, **config['environment'])
+    env = make_env(args.symbol, window_size=6, eval=False)
 
-    # 加载模型
-    model = PPO.load(args.model_path)
+    # 加载训练好的模型
+    model = RecurrentPPO.load("./ppo_trading_model.zip")
 
-    # 运行评估
-    results = evaluate_model(
-        env, model, num_episodes=eval_config['eval_params']['n_eval_episodes'])
+    # 执行评估
+    results = evaluate_model(env, model, num_episodes=5)
 
-    # 输出结果
+    # 输出评估报告
     print("\n=== 评估结果 ===")
     print(f"平均夏普比率: {results['mean_sharpe']:.2f}")
     print(f"最大回撤: {results['max_drawdown']:.2%}")
     print(f"平均总收益: {results['avg_return']:.2%}")
 
-    # 可视化
+    # 可视化净值曲线
     plot_portfolio_results(results['cumulative_returns'])
-
-
-if __name__ == "__main__":
-    main()

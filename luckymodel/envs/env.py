@@ -7,7 +7,7 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3.common.monitor import Monitor
 from basic_model.utils.feature_engineering import FeatureEngineer 
-from gym_trading_env.environments import TradingEnv
+from gym_trading_env.environments_V1 import TradingEnv
 
 import warnings
 warnings.filterwarnings("ignore", category=ResourceWarning)
@@ -104,7 +104,10 @@ def make_env(symbol:str,window_size: int | None =24, eval: bool = False):
           reward_function = one_step_reward, #reward_function,
           # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
           portfolio_initial_value = 1000000, # in FIAT (here, USD)
-          max_episode_duration = 48 * 5 * 4 + 2 , # "max" ,# 500,  
+          max_episode_duration = 48 * 5 , # "max" ,# 500,  
+          target_return=0.15,
+          max_drawdown=-0.05,
+          daily_loss_limit=-0.03,        
           disable_env_checker= True,
           render_mode="logs",
           verbose=1          

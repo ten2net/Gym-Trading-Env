@@ -1,15 +1,15 @@
 import sys
+
 sys.path.append("../")
 from envs.env import make_env
 import warnings
 
-# from gym_trading_env.environments import TradingEnv
-# from env import make_env
 from stable_baselines3.common.utils import get_schedule_fn
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import EvalCallback
 import numpy as np
 import argparse
+from callbacks.mm_callback import MultiMetricCallback
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
 
@@ -55,13 +55,23 @@ def train(symbol_train: str, symbol_eval: str,window_size:int|None =6):
         verbose=0,
         deterministic=True
     )
+    
+    mm_callback = MultiMetricCallback(
+        metrics=[
+            ('daily_return', lambda h: h['daily_return'][-1]),
+            ('max_drawdown', lambda h: (h['portfolio_valuation'].max() - h['portfolio_valuation'][-1])/h['portfolio_valuation'].max()),
+            ('target_achieved', lambda h: 1 if h['portfolio_valuation'][-1]/h['portfolio_valuation'][0] >=1.15 else 0)
+        ],
+        check_freq=1000,  # 每1000步记录一次
+        log_dir="./logs/"        
+    )    
 
     model.learn(
         total_timesteps=2e6,
         progress_bar=False,
         log_interval=10,
         tb_log_name=f"nonlinear_reward_V2",
-        callback=[eval_callback],
+        callback=[eval_callback,mm_callback],
         reset_num_timesteps=True
     )
     print("训练时间步数=", model.num_timesteps)

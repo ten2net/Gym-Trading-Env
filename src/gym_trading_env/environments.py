@@ -264,13 +264,14 @@ class TradingEnv(gym.Env):
     def _calculate_reward(self):
         """分层奖励计算"""
         rewards = {
-            'step':  max(0,round(10 * self._step_reward(),4)),
-            'daily': max(0,round(self._daily_reward(),4)) if self._is_new_day() else 0.0,
+            'step':  round(10 * self._step_reward(),4),
+            'daily': round(self._daily_reward(),4) if self._is_new_day() else 0.0,
             'episode': round(self._episode_reward(),4) if self._terminated else 0.0
         }
         
         # 加权综合
         weights = np.array([0.5, 0.3, 0.2])
+        weights = np.array([1.0, 0.0, 0.0])
         total_reward = np.dot(list(rewards.values()), weights)
         
         self.logger.debug(f"Reward components: {rewards} Total: {total_reward:.4f}")

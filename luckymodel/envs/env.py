@@ -1,4 +1,6 @@
-from basic_model.utils.feature_engineering import FeatureEngineer
+import sys
+sys.path.append("../")
+from envs.feature_engineering import FeatureEngineer
 import warnings
 from gym_trading_env.environments import TradingEnv
 from stable_baselines3.common.monitor import Monitor
@@ -7,8 +9,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional, List, Literal
 import argparse
-import sys
-sys.path.append("./src")
+
 
 
 warnings.filterwarnings("ignore", category=ResourceWarning)

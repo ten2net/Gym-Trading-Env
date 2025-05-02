@@ -22,7 +22,41 @@ def reward_function(history):
                               history["portfolio_valuation", -2])
     return np.clip(log_return, -0.5, 0.5)
 
-
+def excess_return_reward(history, step: int = 0, alpha: float = 1.5, scale_factor: float = 10.0):
+    """
+    基于累计超额收益的分层奖励函数
+    :param history: 历史数据容器
+    :param alpha: 超额收益非线性系数 (α>1时奖励随超额收益加速增长)
+    :param scale_factor: 奖励缩放系数
+    """
+    # 获取初始及当前投资组合价值
+    initial_portfolio = history["portfolio_valuation", 0]
+    current_portfolio = history["portfolio_valuation", -1]
+    
+    # 计算策略累计收益率
+    strategy_return = (current_portfolio - initial_portfolio) / initial_portfolio
+    
+    # 获取市场基准收益率（假设data_close包含标的资产价格）
+    initial_benchmark = history["data_close", 0]
+    current_benchmark = history["data_close", -1]
+    benchmark_return = (current_benchmark - initial_benchmark) / initial_benchmark
+    
+    # 计算超额收益
+    excess_return = strategy_return - benchmark_return
+    
+    if excess_return <= 0:
+        # 未跑赢基准时给予微小负奖励（避免随机扰动）
+        return -0.01 * np.abs(excess_return)
+    
+    # 非线性奖励计算（可调整alpha控制激励强度）
+    reward = scale_factor * (np.exp(alpha * excess_return) - 1)
+    
+    # 添加波动率惩罚项（可选）
+    if step > 10:  # 避免初期波动计算不稳定
+        portfolio_volatility = np.std(np.diff(np.log(history["portfolio_valuation", -10:])) )
+        reward *= np.exp(-2.0 * portfolio_volatility)
+    
+    return float(reward)
 def cal_max_drawdown(history):
     # 添加最大回撤
     peak = np.maximum.accumulate(history['portfolio_valuation'])
@@ -134,7 +168,7 @@ def make_env(
         name=symbol,
         df=df,
         initial_position=0,  # 'random', #Initial position
-        reward_function=one_step_reward,  # reward_function,
+        reward_function=excess_return_reward, ##one_step_reward,  # reward_function,
         # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
         windows=window_size,
         positions=positions,

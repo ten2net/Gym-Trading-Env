@@ -20,9 +20,9 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 
 def train(symbol_train: str,
           symbol_eval: str,
-          window_size: int | None = 15,
-          target_return: float = 0.3,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = 0.05  # 最小目标收益率，低于视为失败，给予惩罚
+          window_size: int | None = 3,
+          target_return: float = 0.35,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = -0.15  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -51,7 +51,7 @@ def train(symbol_train: str,
         **{**common_env_params, 'max_drawdown': -0.2}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
     # 使用PPO算法训练模型
-    initial_lr = 5e-5
+    initial_lr = 1e-4
     final_lr = 1e-6
     # 创建余弦退火学习率调度（从3e-4到1e-6）
     lr_schedule = get_schedule_fn(
@@ -73,11 +73,11 @@ def train(symbol_train: str,
     model = RecurrentPPO(
         "MlpLstmPolicy",
         train_env,
-        learning_rate=lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
+        learning_rate=1e-6 , # lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
         policy_kwargs=policy_kwargs,
         n_epochs=10,
-        gamma=0.995,  # 延长收益视野
-        ent_coef=0.05,  # 初始高探索
+        gamma=0.98,  # 延长收益视野
+        ent_coef=0.08,  # 初始高探索
         verbose=0,
         device=device,
         seed=42,
@@ -129,7 +129,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     symbol_train = args.symbol_train
     symbol_eval = args.symbol_eval
-    model = train(symbol_train, symbol_eval, window_size=15)
+    model = train(symbol_train, symbol_eval, window_size=3)
     # 保存模型
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     model_save_path = f"rppo_trading_model_{timestamp}"

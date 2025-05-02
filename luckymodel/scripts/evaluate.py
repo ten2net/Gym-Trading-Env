@@ -60,11 +60,14 @@ def evaluate_model(env, model, num_episodes=10):
         obs, info = env.reset()
         episode_returns = [1000000]
         done = False
+        truncated = False
 
-        while not done:
+        while not done or not truncated:
             action, _ = model.predict(obs, deterministic=False)
-            obs, _, done, _, info = env.step(action)
+            obs, _, done, truncated, info = env.step(action)
             episode_returns.append(info['portfolio_valuation'])
+            if truncated or done:
+              obs, info = env.reset() 
 
         # 计算各项指标
         metrics.append({
@@ -104,10 +107,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # 创建评估环境
-    env = make_env(args.symbol, window_size=6, eval=False)
+    env = make_env(args.symbol, window_size=3, eval=False)
 
     # 加载训练好的模型
-    model = RecurrentPPO.load("./ppo_trading_model.zip")
+    model = RecurrentPPO.load("./rppo_trading_model_20250502_0302.zip")
 
     # 执行评估
     results = evaluate_model(env, model, num_episodes=5)

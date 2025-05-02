@@ -12,6 +12,7 @@ my_example.py
 *.ai
 raw_data/
 *.csv
+*.zip
 checkpoints/
 logs/
 

@@ -21,8 +21,8 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 def train(symbol_train: str,
           symbol_eval: str,
           window_size: int | None = 3,
-          target_return: float = 0.35,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -0.15  # 最小目标收益率，低于视为失败，给予惩罚
+          target_return: float = 0.25,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -34,8 +34,8 @@ def train(symbol_train: str,
         'max_episode_duration': 48 * 22,
         'target_return': target_return,
         'min_target_return': min_target_return,
-        'max_drawdown': -0.3,
-        'daily_loss_limit': -0.1,
+        'max_drawdown': -0.2,
+        'daily_loss_limit': -0.07,
         'render_mode': "logs",
         'verbose': 1
     }

@@ -23,7 +23,7 @@ def reward_function(history):
                               history["portfolio_valuation", -2])
     return np.clip(log_return, -0.5, 0.5)
 
-def excess_return_reward(history, step: int = 0, alpha: float = 1.5, scale_factor: float = 10.0):
+def excess_return_reward(history, step: int = 0, alpha: float = 1.8, scale_factor: float = 1.0):
     """
     基于累计超额收益的分层奖励函数
     :param history: 历史数据容器
@@ -40,21 +40,24 @@ def excess_return_reward(history, step: int = 0, alpha: float = 1.5, scale_facto
     # 获取市场基准收益率（假设data_close包含标的资产价格）
     initial_benchmark = history["data_close", 0]
     current_benchmark = history["data_close", -1]
-    benchmark_return = (current_benchmark - initial_benchmark) / initial_benchmark
+    benchmark_return = 0.08
+    # benchmark_return = (current_benchmark - initial_benchmark) / initial_benchmark
     
     # 计算超额收益
     excess_return = strategy_return - benchmark_return
     
-    if excess_return <= 0:
+    if excess_return < 0:
         # 未跑赢基准时给予微小负奖励（避免随机扰动）
-        return -0.01 * np.abs(excess_return)
+        return -0.005 * np.abs(excess_return)
     
     # 非线性奖励计算（可调整alpha控制激励强度）
     reward = scale_factor * (np.exp(alpha * excess_return) - 1)
     
     # 添加波动率惩罚项（可选）
     if step > 10:  # 避免初期波动计算不稳定
-        portfolio_volatility = np.std(np.diff(np.log(history["portfolio_valuation", -10:])) )
+        portfolio_values = np.array(history["portfolio_valuation", -10:], dtype=np.float64)  # 确保转换为原生 float64 类型
+        # print(portfolio_values)
+        portfolio_volatility = np.std(np.diff(np.log(portfolio_values)))
         reward *= np.exp(-2.0 * portfolio_volatility)
     
     return float(reward)
@@ -198,6 +201,8 @@ def make_env(
     env.add_metric(
         '奖励 median', lambda history: f"{np.median(history["reward"]):.5f}")
     env.add_metric('最大回撤', lambda history: f"{cal_max_drawdown(history):.2f}")
+    env.add_metric('IDX', lambda history: f"{history['idx',0]}")
+    env.add_metric('IDXLAST', lambda history: f"{history['idx',-1]}")
 
     eval_env = Monitor(env, './eval_logs')
     return env if not eval else eval_env

@@ -12,6 +12,7 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from sb3_contrib import RecurrentPPO
+from stable_baselines3 import PPO
 from envs.env import make_env
 
 class TradingMetricsCalculator:
@@ -49,7 +50,7 @@ class TradingMetricsCalculator:
                 
         return max_dd
 
-def evaluate_model(env, model, num_episodes=10):
+def evaluate_model(env, model, num_episodes=1000):
     """模型评估主函数"""
     
     all_returns = []
@@ -62,12 +63,12 @@ def evaluate_model(env, model, num_episodes=10):
         done = False
         truncated = False
 
-        while not done or not truncated:
+        while not done and not truncated:
             action, _ = model.predict(obs, deterministic=False)
             obs, _, done, truncated, info = env.step(action)
             episode_returns.append(info['portfolio_valuation'])
-            if truncated or done:
-              obs, info = env.reset() 
+            # if truncated or done:
+            #   obs, info = env.reset() 
 
         # 计算各项指标
         metrics.append({
@@ -107,13 +108,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # 创建评估环境
-    env = make_env(args.symbol, window_size=3, eval=False)
+    env = make_env(args.symbol, window_size=None, eval=False)
 
     # 加载训练好的模型
-    model = RecurrentPPO.load("./rppo_trading_model_20250502_0302.zip")
+    # model = RecurrentPPO.load("./rppo_trading_model_20250503_1401.zip")
+    model = PPO.load("./rppo_trading_model_20250504_2153.zip")
 
     # 执行评估
-    results = evaluate_model(env, model, num_episodes=5)
+    results = evaluate_model(env, model, num_episodes=500)
 
     # 输出评估报告
     print("\n=== 评估结果 ===")

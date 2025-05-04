@@ -23,7 +23,7 @@ def reward_function(history):
                               history["portfolio_valuation", -2])
     return np.clip(log_return, -0.5, 0.5)
 
-def excess_return_reward(history, step: int = 0, alpha: float = 1.8, scale_factor: float = 1.0):
+def excess_return_reward(history, step: int = 0, alpha: float = 1.2, scale_factor: float = 1.0):
     """
     基于累计超额收益的分层奖励函数
     :param history: 历史数据容器
@@ -35,36 +35,37 @@ def excess_return_reward(history, step: int = 0, alpha: float = 1.8, scale_facto
     current_portfolio = history["portfolio_valuation", -1]
     
     # 计算策略累计收益率
-    strategy_return = (current_portfolio - initial_portfolio) / initial_portfolio
+    # strategy_return = (current_portfolio - initial_portfolio) / initial_portfolio
+    strategy_return =np.log (current_portfolio / initial_portfolio)
     
     # 获取市场基准收益率（假设data_close包含标的资产价格）
     initial_benchmark = history["data_close", 0]
     current_benchmark = history["data_close", -1]
-    benchmark_return = 0.08
-    # benchmark_return = (current_benchmark - initial_benchmark) / initial_benchmark
+
+    benchmark_return = np.log(current_benchmark / initial_benchmark)
     
     # 计算超额收益
     excess_return = strategy_return - benchmark_return
-    
-    if excess_return < 0:
-        # 未跑赢基准时给予微小负奖励（避免随机扰动）
-        return -0.005 * np.abs(excess_return)
-    
+        
     # 非线性奖励计算（可调整alpha控制激励强度）
-    reward = scale_factor * (np.exp(alpha * excess_return) - 1)
+    reward = scale_factor * (np.exp(alpha * excess_return) - 1) if excess_return > 0 else -0.5 * np.abs(excess_return)
     
     # 添加波动率惩罚项（可选）
     if step > 10:  # 避免初期波动计算不稳定
         portfolio_values = np.array(history["portfolio_valuation", -10:], dtype=np.float64)  # 确保转换为原生 float64 类型
-        # print(portfolio_values)
         portfolio_volatility = np.std(np.diff(np.log(portfolio_values)))
-        reward *= np.exp(-2.0 * portfolio_volatility)
+        reward *= np.exp(-1.2 * portfolio_volatility)
+        if step % 1000 == 0:
+            print(f'{initial_benchmark:.2f} {current_benchmark:.2f} {excess_return:.3f} {reward:.3f} {current_portfolio:.0f} ')
     
     return float(reward)
 def cal_max_drawdown(history):
     # 添加最大回撤
+    # 计算历史数据中投资组合价值的累积最大值
     peak = np.maximum.accumulate(history['portfolio_valuation'])
+    # 计算最大回撤
     drawdown = (peak - history['portfolio_valuation']) / peak
+    # 返回最大回撤的百分比值
     return np.max(drawdown) * 100
 
 
@@ -188,21 +189,21 @@ def make_env(
         verbose=verbose
     )
 
-    env.add_metric('调参次数', lambda history: np.sum(
-        np.diff(history['real_position']) != 0))
-    env.add_metric(
-        '奖励 sum', lambda history: f"{np.sum(history["reward"]):.4f}")
-    env.add_metric(
-        '奖励 max', lambda history: f"{np.max(history["reward"]):.4f}")
-    env.add_metric(
-        '奖励 min', lambda history: f"{np.min(history["reward"]):.4f}")
-    env.add_metric(
-        '奖励 avg', lambda history: f"{np.mean(history["reward"]):.4f}")
-    env.add_metric(
-        '奖励 median', lambda history: f"{np.median(history["reward"]):.5f}")
-    env.add_metric('最大回撤', lambda history: f"{cal_max_drawdown(history):.2f}")
-    env.add_metric('IDX', lambda history: f"{history['idx',0]}")
-    env.add_metric('IDXLAST', lambda history: f"{history['idx',-1]}")
+    # env.add_metric('调参次数', lambda history: np.sum(
+    #     np.diff(history['real_position']) != 0))
+    # env.add_metric(
+    #     '奖励 sum', lambda history: f"{np.sum(history["reward"]):.4f}")
+    # env.add_metric(
+    #     '奖励 max', lambda history: f"{np.max(history["reward"]):.4f}")
+    # env.add_metric(
+    #     '奖励 min', lambda history: f"{np.min(history["reward"]):.4f}")
+    # env.add_metric(
+    #     '奖励 avg', lambda history: f"{np.mean(history["reward"]):.4f}")
+    # env.add_metric(
+    #     '奖励 median', lambda history: f"{np.median(history["reward"]):.5f}")
+    # env.add_metric('最大回撤', lambda history: f"{cal_max_drawdown(history):.2f}")
+    # env.add_metric('IDX', lambda history: f"{history['idx',0]}")
+    # env.add_metric('IDXLAST', lambda history: f"{history['idx',-1]}")
 
     eval_env = Monitor(env, './eval_logs')
     return env if not eval else eval_env

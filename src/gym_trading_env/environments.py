@@ -272,12 +272,12 @@ class TradingEnv(gym.Env):
         """分层奖励计算"""
         rewards = {
             'step':  max(-0.01,round( self._step_reward(), 4)),
-            'daily': max(-0.01,round(self._daily_reward(), 4) if self._is_new_day() else 0.0),
-            'episode':np.clip(round(self._episode_reward(), 4) if (self._terminated or self._truncated) else 0.0,-1,5)
+            'daily': 0.0, #max(-0.01,round(self._daily_reward(), 4) if self._is_new_day() else 0.0),
+            'episode':0.0 #np.clip(round(self._episode_reward(), 4) if (self._terminated or self._truncated) else 0.0,-1,5)
         }
         # 加权综合
         # weights = np.array([0.5, 0.3, 0.2])
-        weights = np.array([1.0, 1.0, 0.1])
+        weights = np.array([1.0, 0.0, 0.5])
         total_reward = np.dot(list(rewards.values()), weights)
         total_reward = 10 * np.clip(total_reward, -0.03, 0.3)
 
@@ -291,15 +291,15 @@ class TradingEnv(gym.Env):
         return total_reward
 
     def _step_reward(self):
-        current_value = self.portfolio.valorisation(self._get_price())
-        previous_value = self.history["portfolio_valuation", -1]
+        # current_value = self.portfolio.valorisation(self._get_price())
+        # previous_value = self.history["portfolio_valuation", -1]
 
-        if previous_value <= 0:
-            return 0.000001
+        # if previous_value <= 0:
+        #     return 0.000001
 
-        log_return = np.log(current_value / previous_value)
-        return float(log_return)
-        # return self.reward_function(history=self.history,step=self._step)
+        # log_return = np.log(current_value / previous_value)
+        # return float(log_return)
+        return self.reward_function(history = self.history, step = self._step)
 
     def _daily_reward(self):
         daily_return = np.log(self._day_close_value / self._day_open_value)

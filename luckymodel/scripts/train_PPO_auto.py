@@ -1,5 +1,9 @@
 import sys
+
 sys.path.append("../")
+
+import optuna
+from stable_baselines3 import PPO
 import datetime
 import argparse
 import numpy as np
@@ -12,17 +16,48 @@ import warnings
 from envs.env import make_env
 import torch
 
-sys.path.append("../")
-
+from stable_baselines3.common.evaluation import evaluate_policy
 warnings.filterwarnings("ignore", category=ResourceWarning)
 warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
 
 
+
+def evaluate_model(model, env, n_episodes=10):
+    total_rewards = []
+    episode_lengths = []
+    
+    for _ in range(n_episodes):
+        obs = env.reset()
+        done = False
+        episode_reward = 0
+        steps = 0
+        
+        while not done:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, truncated, info = env.step(action)
+            episode_reward += reward
+            steps += 1
+            done = done or truncated  # 处理环境终止条件
+            
+        total_rewards.append(episode_reward)
+        episode_lengths.append(steps)
+    
+    # 计算统计指标
+    mean_reward = np.mean(total_rewards)
+    std_reward = np.std(total_rewards)
+    mean_length = np.mean(episode_lengths)
+    
+    # 打印诊断信息
+    print(f"评估结果 ({n_episodes} episodes):")
+    print(f"平均奖励: {mean_reward:.2f} ± {std_reward:.2f}")
+    print(f"平均回合长度: {mean_length:.1f} steps")
+    
+    return mean_reward
 def train(symbol_train: str,
           symbol_eval: str,
-          window_size: int | None = 3,
-          target_return: float = 0.2,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
+          window_size: int | None = None,
+          target_return: float = 3.2,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = -3.1  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -31,13 +66,13 @@ def train(symbol_train: str,
         'positions': [0, 0.5, 1],
         'trading_fees': 0.01/100,
         'portfolio_initial_value': 1000000.0,
-        'max_episode_duration': 48 * 22,
+        'max_episode_duration': 1024,
         'target_return': target_return,
         'min_target_return': min_target_return,
         'max_drawdown': -0.8,
         'daily_loss_limit': -0.8,
         'render_mode': "logs",
-        'verbose': 1
+        'verbose': 0
     }
     # 创建训练环境（可添加训练特有的参数）
     train_env = make_env(
@@ -51,7 +86,7 @@ def train(symbol_train: str,
         **{**common_env_params, 'max_drawdown': -0.8}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
     # 使用PPO算法训练模型
-    initial_lr = 1e-4
+    initial_lr = 3e-4
     final_lr = 1e-6
     # 创建余弦退火学习率调度（从3e-4到1e-6）
     lr_schedule = get_schedule_fn(
@@ -59,59 +94,33 @@ def train(symbol_train: str,
         (initial_lr - final_lr)*(1 + np.cos(np.pi*progress))
     )
 
-    # 创建LSTM策略模型
-    policy_kwargs = dict(
-        lstm_hidden_size=256,
-        net_arch=dict(
-            pi=[128, 128],  # 显式定义LSTM层
-            vf=[128, 128]),
-        enable_critic_lstm=False,  # 关闭Critic的LSTM
-        # optimizer_kwargs=dict(weight_decay=1e-4)
-    )
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print("torch.cuda.is_available()=", torch.cuda.is_available())
-    model = RecurrentPPO(
-        "MlpLstmPolicy",
-        train_env,
-        learning_rate=1e-6 , # lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
-        policy_kwargs=policy_kwargs,
-        n_epochs=10,
-        gamma=0.92,  # 延长收益视野
-        ent_coef=0.05,  # 初始高探索
-        verbose=0,
-        device=device,
-        seed=42,
-        tensorboard_log=f"../logs/stock_trading2/")
-    # 评估回调
-    early_stop_callback = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=100,  # 允许的连续无提升评估次数
-        min_evals=5,                  # 最少评估次数后才开始检查
-        verbose=1                     # 是否打印日志
-    )
-    eval_callback = EvalCallback(
-        eval_env=eval_env,
-        callback_on_new_best=early_stop_callback,  # 绑定早停回调
-        best_model_save_path="../checkpoints/best_models/",
-        eval_freq=48 * 22,
-        n_eval_episodes=10,
-        verbose=0,
-        deterministic=True,
-        render=False
-    )
-    progressBarCallback = ProgressBarCallback()
 
-    model.learn(
-        total_timesteps=2e6,
-        progress_bar=False,
-        log_interval=10,
-        tb_log_name=f"new_reward",
-        # callback=[eval_callback,
-        #           progressBarCallback],
-        reset_num_timesteps=True
-    )
-    print("训练时间步数=", model.num_timesteps)
-    return model
+    def objective(trial):
+        params = {
+            'learning_rate': trial.suggest_loguniform('lr', 1e-5, 1e-4),
+            'n_steps': trial.suggest_categorical('n_steps', [512, 1024, 2048, 4096]),
+            'batch_size': trial.suggest_categorical('batch_size', [64, 128, 256]),
+            'n_epochs': trial.suggest_int('n_epochs', 5, 10, 20),
+            'gamma': trial.suggest_float('gamma', 0.9, 0.9999),
+            'ent_coef': trial.suggest_float('ent_coef', 0.02, 0.04, 0.06, 0.08, 0.10, 0.12),
+            'gae_lambda': trial.suggest_float('gae_lambda', 0.90, 0.95, 0.98),
+            'clip_range': trial.suggest_float('clip_range', 0.1, 0.3),
+            'verbose': 0
+        }
+        
+        model = PPO("MlpPolicy", train_env, **params)
+        model.learn(total_timesteps=10000,        
+                    progress_bar=True,
+                    log_interval=10,
+                    tb_log_name=f"ppo_new_reward",
+                    reset_num_timesteps=True)
+        mean_reward = evaluate_model(model, eval_env, n_episodes=10)  # 自定义评估函数
+        return mean_reward
 
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=50, show_progress_bar=True)
 
 if __name__ == "__main__":
     # 参数解析

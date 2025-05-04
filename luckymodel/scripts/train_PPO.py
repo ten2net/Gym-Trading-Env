@@ -1,4 +1,6 @@
 import sys
+
+from stable_baselines3 import PPO
 sys.path.append("../")
 import datetime
 import argparse
@@ -20,9 +22,9 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 
 def train(symbol_train: str,
           symbol_eval: str,
-          window_size: int | None = 3,
-          target_return: float = 0.2,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
+          window_size: int | None = None,
+          target_return: float = 3.2,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = -3.1  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -31,13 +33,13 @@ def train(symbol_train: str,
         'positions': [0, 0.5, 1],
         'trading_fees': 0.01/100,
         'portfolio_initial_value': 1000000.0,
-        'max_episode_duration': 48 * 22,
+        'max_episode_duration': 1024,
         'target_return': target_return,
         'min_target_return': min_target_return,
         'max_drawdown': -0.8,
         'daily_loss_limit': -0.8,
         'render_mode': "logs",
-        'verbose': 1
+        'verbose': 0
     }
     # 创建训练环境（可添加训练特有的参数）
     train_env = make_env(
@@ -51,60 +53,54 @@ def train(symbol_train: str,
         **{**common_env_params, 'max_drawdown': -0.8}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
     # 使用PPO算法训练模型
-    initial_lr = 1e-4
-    final_lr = 1e-6
+    initial_lr = 3e-3
+    final_lr = 3e-5
     # 创建余弦退火学习率调度（从3e-4到1e-6）
     lr_schedule = get_schedule_fn(
         lambda progress: final_lr + 0.5 *
         (initial_lr - final_lr)*(1 + np.cos(np.pi*progress))
     )
 
-    # 创建LSTM策略模型
-    policy_kwargs = dict(
-        lstm_hidden_size=256,
-        net_arch=dict(
-            pi=[128, 128],  # 显式定义LSTM层
-            vf=[128, 128]),
-        enable_critic_lstm=False,  # 关闭Critic的LSTM
-        # optimizer_kwargs=dict(weight_decay=1e-4)
-    )
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print("torch.cuda.is_available()=", torch.cuda.is_available())
-    model = RecurrentPPO(
-        "MlpLstmPolicy",
+    model = PPO(
+        "MlpPolicy",
         train_env,
-        learning_rate=1e-6 , # lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
-        policy_kwargs=policy_kwargs,
+        learning_rate= lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
+        # policy_kwargs=policy_kwargs,
+        n_steps=1024,
+        batch_size=128,
         n_epochs=10,
-        gamma=0.92,  # 延长收益视野
-        ent_coef=0.05,  # 初始高探索
+        gamma=0.99,  # 延长收益视野
+        ent_coef=0.01,  # 初始高探索
+        gae_lambda=0.98,
         verbose=0,
         device=device,
         seed=42,
         tensorboard_log=f"../logs/stock_trading2/")
-    # 评估回调
-    early_stop_callback = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=100,  # 允许的连续无提升评估次数
-        min_evals=5,                  # 最少评估次数后才开始检查
-        verbose=1                     # 是否打印日志
-    )
-    eval_callback = EvalCallback(
-        eval_env=eval_env,
-        callback_on_new_best=early_stop_callback,  # 绑定早停回调
-        best_model_save_path="../checkpoints/best_models/",
-        eval_freq=48 * 22,
-        n_eval_episodes=10,
-        verbose=0,
-        deterministic=True,
-        render=False
-    )
-    progressBarCallback = ProgressBarCallback()
+    # # 评估回调
+    # early_stop_callback = StopTrainingOnNoModelImprovement(
+    #     max_no_improvement_evals=100,  # 允许的连续无提升评估次数
+    #     min_evals=5,                  # 最少评估次数后才开始检查
+    #     verbose=1                     # 是否打印日志
+    # )
+    # eval_callback = EvalCallback(
+    #     eval_env=eval_env,
+    #     callback_on_new_best=early_stop_callback,  # 绑定早停回调
+    #     best_model_save_path="../checkpoints/best_models/",
+    #     eval_freq=48 * 22,
+    #     n_eval_episodes=10,
+    #     verbose=0,
+    #     deterministic=True,
+    #     render=False
+    # )
+    # progressBarCallback = ProgressBarCallback()
 
     model.learn(
-        total_timesteps=2e6,
-        progress_bar=False,
+        total_timesteps=1e7,
+        progress_bar=True,
         log_interval=10,
-        tb_log_name=f"new_reward",
+        tb_log_name=f"ppo_new_reward",
         # callback=[eval_callback,
         #           progressBarCallback],
         reset_num_timesteps=True

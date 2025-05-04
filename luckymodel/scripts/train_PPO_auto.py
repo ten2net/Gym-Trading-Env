@@ -1,4 +1,5 @@
 import sys
+import json
 
 sys.path.append("../")
 
@@ -27,7 +28,7 @@ def evaluate_model(model, env, n_episodes=10):
     episode_lengths = []
     
     for _ in range(n_episodes):
-        obs = env.reset()
+        obs,_ = env.reset()
         done = False
         episode_reward = 0
         steps = 0
@@ -99,13 +100,13 @@ def train(symbol_train: str,
 
     def objective(trial):
         params = {
-            'learning_rate': trial.suggest_loguniform('lr', 1e-5, 1e-4),
+            'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True),
             'n_steps': trial.suggest_categorical('n_steps', [512, 1024, 2048, 4096]),
             'batch_size': trial.suggest_categorical('batch_size', [64, 128, 256]),
-            'n_epochs': trial.suggest_int('n_epochs', 5, 10, 20),
+            'n_epochs': trial.suggest_int('n_epochs', 5, 20, step=5),
             'gamma': trial.suggest_float('gamma', 0.9, 0.9999),
-            'ent_coef': trial.suggest_float('ent_coef', 0.02, 0.04, 0.06, 0.08, 0.10, 0.12),
-            'gae_lambda': trial.suggest_float('gae_lambda', 0.90, 0.95, 0.98),
+            'ent_coef': trial.suggest_float('ent_coef', 0.0, 0.1),
+            'gae_lambda': trial.suggest_float('gae_lambda', 0.80, 0.99),
             'clip_range': trial.suggest_float('clip_range', 0.1, 0.3),
             'verbose': 0
         }
@@ -121,6 +122,23 @@ def train(symbol_train: str,
 
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=50, show_progress_bar=True)
+    
+    # 保存最佳参数
+    with open("best_params.json", "w") as f:
+        json.dump(study.best_params, f, indent=2, ensure_ascii=False)
+        
+    # 输出最佳结果
+    print("\n=== 最佳参数 ===")
+    print(study.best_params)
+    
+    # 用最佳参数训练最终模型
+    final_model = PPO(
+        "MlpPolicy",
+        train_env,
+        **study.best_params
+    )
+    final_model.learn(total_timesteps=500000)
+    final_model.save("final_ppo_model")
 
 if __name__ == "__main__":
     # 参数解析
@@ -138,7 +156,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     symbol_train = args.symbol_train
     symbol_eval = args.symbol_eval
-    model = train(symbol_train, symbol_eval, window_size=3)
+    model = train(symbol_train, symbol_eval, window_size=None)
     # 保存模型
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     model_save_path = f"rppo_trading_model_{timestamp}"

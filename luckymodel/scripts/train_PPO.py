@@ -53,8 +53,8 @@ def train(symbol_train: str,
         **{**common_env_params, 'max_drawdown': -0.8}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
     # 使用PPO算法训练模型
-    initial_lr = 3e-3
-    final_lr = 3e-5
+    initial_lr = 1e-4
+    final_lr = 1e-5
     # 创建余弦退火学习率调度（从3e-4到1e-6）
     lr_schedule = get_schedule_fn(
         lambda progress: final_lr + 0.5 *

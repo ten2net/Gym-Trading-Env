@@ -23,8 +23,8 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 def train(symbol_train: str,
           symbol_eval: str,
           window_size: int | None = None,
-          target_return: float = 3.2,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -3.1  # 最小目标收益率，低于视为失败，给予惩罚
+          target_return: float = 0.25,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = -0.3  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -53,8 +53,8 @@ def train(symbol_train: str,
         **{**common_env_params, 'max_drawdown': -0.8}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
     # 使用PPO算法训练模型
-    initial_lr = 1e-4
-    final_lr = 1e-5
+    initial_lr = 1e-6
+    final_lr = 1e-4
     # 创建余弦退火学习率调度（从3e-4到1e-6）
     lr_schedule = get_schedule_fn(
         lambda progress: final_lr + 0.5 *
@@ -69,10 +69,10 @@ def train(symbol_train: str,
         learning_rate= lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
         # policy_kwargs=policy_kwargs,
         n_steps=1024,
-        batch_size=128,
+        batch_size=512,
         n_epochs=10,
-        gamma=0.99,  # 延长收益视野
-        ent_coef=0.01,  # 初始高探索
+        gamma=0.95,  # 延长收益视野
+        ent_coef=0.005,  # 初始高探索
         gae_lambda=0.98,
         verbose=0,
         device=device,
@@ -97,7 +97,7 @@ def train(symbol_train: str,
     # progressBarCallback = ProgressBarCallback()
 
     model.learn(
-        total_timesteps=1e7,
+        total_timesteps=8e6,
         progress_bar=True,
         log_interval=10,
         tb_log_name=f"ppo_new_reward",

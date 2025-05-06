@@ -23,42 +23,88 @@ def reward_function(history):
                               history["portfolio_valuation", -2])
     return np.clip(log_return, -0.5, 0.5)
 
-def excess_return_reward(history, step: int = 0, alpha: float = 1.2, scale_factor: float = 1.0):
-    """
-    基于累计超额收益的分层奖励函数
-    :param history: 历史数据容器
-    :param alpha: 超额收益非线性系数 (α>1时奖励随超额收益加速增长)
-    :param scale_factor: 奖励缩放系数
-    """
-    # 获取初始及当前投资组合价值
-    initial_portfolio = history["portfolio_valuation", 0]
-    current_portfolio = history["portfolio_valuation", -1]
-    
-    # 计算策略累计收益率
-    # strategy_return = (current_portfolio - initial_portfolio) / initial_portfolio
-    strategy_return =np.log (current_portfolio / initial_portfolio)
-    
-    # 获取市场基准收益率（假设data_close包含标的资产价格）
-    initial_benchmark = history["data_close", 0]
-    current_benchmark = history["data_close", -1]
 
-    benchmark_return = np.log(current_benchmark / initial_benchmark)
+def elu(x, alpha=1.0):
+    return np.where(x > 0, x, alpha * (np.exp(x) - 1))
+def layered_reward(history, step: int, 
+                  base_alpha: float = 1.0, 
+                  excess_alpha: float = 1.5, 
+                  scale: float = 1.0,
+                  volatility_window: int = 20,
+                  daily_trading_hours: float = 4.0,  # A股每日交易4小时
+                  minutes_per_bar: int = 5) -> float:
+    """
+    分层奖励函数：正策略收益基础奖励 + 正超额收益额外奖励
+    :param base_alpha: 基础奖励系数（建议0.3-1.0）
+    :param excess_alpha: 超额收益奖励系数（建议1.2-2.0）
+    :param scale: 全局奖励缩放因子
+    :param volatility_window: 波动率计算滚动窗口
+    """
+    # 获取关键数据
+    port_init = history["portfolio_valuation", 0]
+    port_current = history["portfolio_valuation", -1]
+    port_prev = history["portfolio_valuation", -2] if step>1 else port_init
+    bench_init = history["data_close", 0]
+    bench_current = history["data_close", -1]
+    bench_prev = history["data_close", -2]  if step>1 else bench_init
+
+    # 计算收益（对数收益率）
+    strategy_now = np.log(port_current / port_prev)
+    # strategy_ret = np.log(port_current / port_init)
+    # bench_ret = np.log(bench_current / bench_init)
+    bench_now = np.log(bench_current / bench_prev)
+    # excess_ret = strategy_ret - bench_ret  # 超额收益
+
+    # 初始化奖励
+    reward_basic =  elu(1000 * base_alpha * strategy_now)
+    reward_ext = elu(1000 * excess_alpha * (strategy_now - bench_now ))
     
-    # 计算超额收益
-    excess_return = strategy_return - benchmark_return
-        
-    # 非线性奖励计算（可调整alpha控制激励强度）
-    reward = scale_factor * (np.exp(alpha * excess_return) - 1) if excess_return > 0 else -0.5 * np.abs(excess_return)
+    reward = (reward_basic + reward_ext) / 1000.0
     
-    # 添加波动率惩罚项（可选）
-    if step > 10:  # 避免初期波动计算不稳定
-        portfolio_values = np.array(history["portfolio_valuation", -10:], dtype=np.float64)  # 确保转换为原生 float64 类型
-        portfolio_volatility = np.std(np.diff(np.log(portfolio_values)))
-        reward *= np.exp(-1.2 * portfolio_volatility)
-        if step % 1000 == 0:
-            print(f'{initial_benchmark:.2f} {current_benchmark:.2f} {excess_return:.3f} {reward:.3f} {current_portfolio:.0f} ')
+    # if step % 1000 == 0:
+    #     print(f'{strategy_now:.7f} {bench_now:.7f} {reward_basic:.3f} {reward_ext:.3f} {reward:.3f} ')
     
-    return float(reward)
+
+
+    # # 第一层：策略收益正时基础奖励 ---
+    # if strategy_ret > 0:
+    #     # 基础奖励：双曲正切函数（范围0-1）
+    #     base_reward = np.tanh(base_alpha * strategy_ret)  # 渐进饱和防止过激励
+    #     reward += scale * base_reward
+
+    #     # 第二层：超额收益正时额外奖励 ---
+    #     if excess_ret > 0:
+    #         # 超额奖励：指数增长（强化显著优势）
+    #         excess_reward = np.exp(excess_alpha * excess_ret) - 1
+    #         reward += scale * excess_reward
+    #     else:
+    #         # 跑输基准的轻度惩罚（可选）
+    #         reward -= np.abs(excess_ret)
+    # else:
+    #     # 策略亏损惩罚（线性）
+    #     reward -= np.abs(excess_ret)
+
+    # 波动率惩罚（动态调整窗口） 精确适配A股的波动率年化计算 
+    if step > 15:
+        # 计算A股5分钟K线的年化因子
+        bars_per_day = int((daily_trading_hours * 60) // minutes_per_bar)  # 4h=240m → 240/5=48
+        annualization_factor = np.sqrt(252 * bars_per_day)  # √(252 * 48)=√12096≈109.98
+
+        # 获取组合价值窗口
+        min_window = 5  # 至少需要5根K线
+        window = max(min_window, min(step, volatility_window))
+        port_vals = np.array(history["portfolio_valuation", -window:], dtype=np.float64)
+
+        # 计算年化波动率
+        if len(port_vals) >= 2:
+            log_returns = np.diff(np.log(port_vals))
+            if len(log_returns) > 0:
+                vol_5min = np.std(log_returns)
+                vol_annualized = vol_5min * annualization_factor
+                reward *= np.exp(-1.8 * vol_annualized)  # 波动惩罚项
+
+    return float(np.clip(reward, -2.0, 5.0))  # 限制奖励范围防止数值爆炸      
+
 def cal_max_drawdown(history):
     # 添加最大回撤
     # 计算历史数据中投资组合价值的累积最大值
@@ -173,7 +219,7 @@ def make_env(
         name=symbol,
         df=df,
         initial_position=0,  # 'random', #Initial position
-        reward_function=excess_return_reward, ##one_step_reward,  # reward_function,
+        reward_function=layered_reward,
         # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
         windows=window_size,
         positions=positions,

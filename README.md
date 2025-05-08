@@ -61,3 +61,26 @@ git clone https://github.com/ClementPerroud/Gym-Trading-Env
 
 [Documentation available here](https://gym-trading-env.readthedocs.io/en/latest/index.html)
 -----------------------------------------------------------------------------------------------
+## 常见问题
+
+- 1、pip install ta-lib无法安装ta-lib,原因可能是Ta-Lab的版本与python的ta-lib版本不匹配导致的
+
+```shell
+pip uninstall ta-lib
+rm -rf ~/.cache/pip  # 清除 pip 缓存
+find ~/.pyenv -name "*ta-lib*" -exec rm -rf {} +  # 删除虚拟环境中的残留
+
+
+参考：https://ta-lib.org/install
+
+wget https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib-0.6.4-windows-x86_64.zip
+
+dpkg -i ta-lib_0.6.4_amd64.deb
+
+If you choose to uninstall do:
+sudo dpkg -r ta-lib
+
+# 确保链接到正确的库
+export LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
+pip install --no-cache-dir ta-lib==0.6.3
+```

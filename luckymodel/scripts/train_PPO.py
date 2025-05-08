@@ -23,8 +23,8 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 def train(symbol_train: str,
           symbol_eval: str,
           window_size: int | None = None,
-          target_return: float = 0.25,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -0.3  # 最小目标收益率，低于视为失败，给予惩罚
+          target_return: float = 0.15,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = -0.15  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -53,15 +53,37 @@ def train(symbol_train: str,
         **{**common_env_params, 'max_drawdown': -0.8}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
     # 使用PPO算法训练模型
-    initial_lr = 1e-6
-    final_lr = 1e-4
-    # 创建余弦退火学习率调度（从3e-4到1e-6）
-    lr_schedule = get_schedule_fn(
-        lambda progress: final_lr + 0.5 *
-        (initial_lr - final_lr)*(1 + np.cos(np.pi*progress))
-    )
+    # initial_lr = 1e-6
+    # final_lr = 1e-4
+    # # 创建余弦退火学习率调度（从3e-4到1e-6）
+    # lr_schedule = get_schedule_fn(
+    #     lambda progress: final_lr + 0.5 *
+    #     (initial_lr - final_lr)*(1 + np.cos(np.pi*progress))
+    # )
+    # 线性预热+余弦退火
+    # 线性预热可以避免训练初期的不稳定
+    # 余弦退火提供平滑的衰减
+    # 整体训练过程更加稳定可控    
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    initial_lr = 1e-6    # 最终学习率（训练结束时）
+    final_lr = 1e-4      # 峰值学习率（预热结束后）
+    warmup_ratio = 0.4    # 前30%训练时间用于预热
+
+    def lr_lambda(progress):
+        if progress > (1 - warmup_ratio):  
+            # 线性预热阶段（progress从1.0→0.7）
+            # 目标：学习率从0线性增长到final_lr
+            warmup_progress = 1 - (progress - (1 - warmup_ratio)) / warmup_ratio  # 映射[1.0, 0.7]→[0,1]
+            return final_lr * warmup_progress
+        else:
+            # 余弦退火阶段（progress从0.7→0）
+            # 目标：学习率从final_lr平滑衰减到initial_lr
+            decay_progress = (progress / (1 - warmup_ratio))  # 映射[0.7,0]→[1,0]
+            return final_lr + 0.5 * (initial_lr - final_lr) * (1 + np.cos(0.5 * np.pi * decay_progress))
+
+    lr_schedule = get_schedule_fn(lr_lambda)
+
+    device = "cpu" #'cuda' if torch.cuda.is_available() else 'cpu'
     print("torch.cuda.is_available()=", torch.cuda.is_available())
     model = PPO(
         "MlpPolicy",
@@ -71,8 +93,8 @@ def train(symbol_train: str,
         n_steps=1024,
         batch_size=512,
         n_epochs=10,
-        gamma=0.95,  # 延长收益视野
-        ent_coef=0.005,  # 初始高探索
+        gamma=0.99,  # 延长收益视野
+        ent_coef=0.01,  # 初始高探索
         gae_lambda=0.98,
         verbose=0,
         device=device,

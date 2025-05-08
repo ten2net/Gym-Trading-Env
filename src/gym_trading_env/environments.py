@@ -273,7 +273,7 @@ class TradingEnv(gym.Env):
         rewards = {
             'step':  max(-0.01,round( self._step_reward(), 4)),
             'daily': 0.0, #max(-0.01,round(self._daily_reward(), 4) if self._is_new_day() else 0.0),
-            'episode':0.0 #np.clip(round(self._episode_reward(), 4) if (self._terminated or self._truncated) else 0.0,-1,5)
+            'episode':np.clip(round(self._episode_reward(), 5) if (self._terminated) else 0.0,-3,10)
         }
         # 加权综合
         # weights = np.array([0.5, 0.3, 0.2])

@@ -283,9 +283,9 @@ class TradingEnv(gym.Env):
         }
         # 加权综合
         # weights = np.array([0.5, 0.3, 0.2])
-        weights = np.array([1.0, 0.0, 1.0])
+        weights = np.array([10.0, 0.0, 1.0])
         total_reward = np.dot(list(rewards.values()), weights)
-        total_reward = np.clip(total_reward, -2.0, 5.0)
+        # total_reward = 10*np.clip(total_reward, -2.0, 5.0)
 
         self.logger.debug(
             f"Reward components: {rewards} Total: {total_reward:.4f}")
@@ -319,16 +319,19 @@ class TradingEnv(gym.Env):
         final_value = self.portfolio.valorisation(self._get_price())
         total_return = (final_value / self.portfolio_initial_value) - 1
 
-        if self._successful_termination:
+        if self._terminated:
             # 目标达成奖励
-            excess_return = total_return - self.target_return
-            return 4.0 + 100.0 * excess_return
-        elif total_return <= self.min_target_return:
-            # 未达成惩罚
-            excess_return = self.min_target_return - total_return
-            return -2.0 + 100.0 * excess_return
+            if self._successful_termination:
+                excess_return = total_return - self.target_return
+                return 4.0 + 100.0 * excess_return 
+            else:
+                # 未达成惩罚
+                excess_return = self.min_target_return - total_return
+                return -1.0 + 100.0 * excess_return
+        elif self._truncated:
+            return -0.5
         else:
-            return -0.01
+            return 0.0
               
     def _check_termination(self):
         current_value = self.portfolio.valorisation(self._get_price())
@@ -356,12 +359,15 @@ class TradingEnv(gym.Env):
 
         # 优先级设置：目标达成优先于其他失败条件
         if target_achieved:
+            self._terminated = True
             self._termination_reason = "策略目标达成"
             self._successful_termination = True
-            self._terminated = True
+            self._truncated = False
         else:
             self._terminated = drawdown_achieved
+            self._termination_reason = f"超过最大回撤{self.min_target_return}" if drawdown_achieved else ""
             self._successful_termination = False
+            self._truncated = False
             # self._terminated = any([
             #     termination_conditions['bankruptcy'],
             #     termination_conditions['max_drawdown'],
@@ -376,7 +382,9 @@ class TradingEnv(gym.Env):
 
         self._truncated = termination_conditions['max_steps']
         if self._truncated:
+            self._terminated = False
             self._termination_reason = f"超过最大步数{self.max_episode_duration}"
+            self._successful_termination = False
 
         if self._terminated or self._truncated:
             # 记录最终指标

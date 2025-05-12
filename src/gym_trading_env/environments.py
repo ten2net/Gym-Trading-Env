@@ -285,7 +285,7 @@ class TradingEnv(gym.Env):
         # weights = np.array([0.5, 0.3, 0.2])
         weights = np.array([1.0, 0.0, 1.0])
         total_reward = np.dot(list(rewards.values()), weights)
-        total_reward = np.clip(total_reward, -1.0, 5.0)
+        total_reward = np.clip(total_reward, -2.0, 5.0)
 
         self.logger.debug(
             f"Reward components: {rewards} Total: {total_reward:.4f}")
@@ -322,13 +322,13 @@ class TradingEnv(gym.Env):
         if self._successful_termination:
             # 目标达成奖励
             excess_return = total_return - self.target_return
-            return 2.0 + 100.0 * excess_return
+            return 4.0 + 100.0 * excess_return
         elif total_return <= self.min_target_return:
             # 未达成惩罚
             excess_return = self.min_target_return - total_return
-            return -1.0 + 100.0 * excess_return
+            return -2.0 + 100.0 * excess_return
         else:
-            return -0.001
+            return -0.01
               
     def _check_termination(self):
         current_value = self.portfolio.valorisation(self._get_price())

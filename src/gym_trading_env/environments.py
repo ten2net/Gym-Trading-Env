@@ -22,6 +22,10 @@ def dynamic_feature_last_position_taken(history):
 
 def dynamic_feature_real_position(history):
     return history['real_position', -1]
+def dynamic_feature_step_progress(history):
+    return history['step_progress', -1]
+def dynamic_feature_portfolio_return(history):
+    return history['portfolio_return', -1]
 
 
 class TradingEnv(gym.Env):
@@ -31,7 +35,7 @@ class TradingEnv(gym.Env):
         self,
         df: pd.DataFrame,
         positions: list = [0, 1],
-        dynamic_feature_functions=[dynamic_feature_real_position],
+        dynamic_feature_functions=[dynamic_feature_real_position, dynamic_feature_step_progress, dynamic_feature_portfolio_return],
         reward_function=basic_reward_function,
         windows: Optional[int] = None,
         trading_fees: float = 0.0005,
@@ -165,12 +169,14 @@ class TradingEnv(gym.Env):
         self.history.set(
             idx=self._idx,
             step=self._step,
+            step_progress=self._step / self.max_episode_duration if isinstance(self.max_episode_duration, int) else self._step / len(self.df),
             date=self.current_date,
             position_index=self.positions.index(self._position),
             position=self._position,
             real_position=self._position,
             data=dict(zip(self._info_columns, self._info_array[self._idx])),
             portfolio_valuation=self.portfolio_initial_value,
+            portfolio_return=0,
             portfolio_distribution=initial_distribution,  # 使用预定义结构
             price=self._get_price(),
             reward=0,
@@ -271,15 +277,15 @@ class TradingEnv(gym.Env):
     def _calculate_reward(self):
         """分层奖励计算"""
         rewards = {
-            'step':  max(-0.01,round( self._step_reward(), 4)),
+            'step':  max(-0.005,self._step_reward()),
             'daily': 0.0, #max(-0.01,round(self._daily_reward(), 4) if self._is_new_day() else 0.0),
-            'episode':np.clip(round(self._episode_reward(), 5) if (self._terminated) else 0.0,-3,10)
+            'episode':self._episode_reward()
         }
         # 加权综合
         # weights = np.array([0.5, 0.3, 0.2])
-        weights = np.array([1.0, 0.0, 0.5])
+        weights = np.array([1.0, 0.0, 1.0])
         total_reward = np.dot(list(rewards.values()), weights)
-        total_reward = 10 * np.clip(total_reward, -0.03, 0.3)
+        total_reward = np.clip(total_reward, -1.0, 5.0)
 
         self.logger.debug(
             f"Reward components: {rewards} Total: {total_reward:.4f}")
@@ -291,31 +297,23 @@ class TradingEnv(gym.Env):
         return total_reward
 
     def _step_reward(self):
-        # current_value = self.portfolio.valorisation(self._get_price())
-        # previous_value = self.history["portfolio_valuation", -1]
-
-        # if previous_value <= 0:
-        #     return 0.000001
-
-        # log_return = np.log(current_value / previous_value)
-        # return float(log_return)
         return self.reward_function(history = self.history, step = self._step)
 
-    def _daily_reward(self):
-        daily_return = np.log(self._day_close_value / self._day_open_value)
-        volatility = self._daily_volatility()
-        return daily_return - 0.25 * volatility
+    # def _daily_reward(self):
+    #     daily_return = np.log(self._day_close_value / self._day_open_value)
+    #     volatility = self._daily_volatility()
+    #     return daily_return - 0.25 * volatility
 
-    def _daily_volatility(self):
-        # 获取当日所有净值记录
-        day_values = [entry['portfolio_value']
-                      for entry in self.history
-                      if entry['date'].date() == self.current_date.date()]
-        if len(day_values) < 2:
-            return 0.0
+    # def _daily_volatility(self):
+    #     # 获取当日所有净值记录
+    #     day_values = [entry['portfolio_value']
+    #                   for entry in self.history
+    #                   if entry['date'].date() == self.current_date.date()]
+    #     if len(day_values) < 2:
+    #         return 0.0
 
-        log_returns = np.diff(np.log(day_values))
-        return np.std(log_returns)
+    #     log_returns = np.diff(np.log(day_values))
+    #     return np.std(log_returns)
 
     def _episode_reward(self):
         final_value = self.portfolio.valorisation(self._get_price())
@@ -324,13 +322,13 @@ class TradingEnv(gym.Env):
         if self._successful_termination:
             # 目标达成奖励
             excess_return = total_return - self.target_return
-            return 20.0 + 100.0 * excess_return
+            return 2.0 + 100.0 * excess_return
         elif total_return <= self.min_target_return:
             # 未达成惩罚
             excess_return = self.min_target_return - total_return
-            return -10.0 + 100.0 * excess_return
+            return -1.0 + 100.0 * excess_return
         else:
-            return 0.0
+            return -0.001
               
     def _check_termination(self):
         current_value = self.portfolio.valorisation(self._get_price())
@@ -344,13 +342,15 @@ class TradingEnv(gym.Env):
 
         # 策略目标达成检查
         target_achieved = total_return >= self.target_return
+        # 策略回撤检查
+        drawdown_achieved = self._check_bankruptcy(current_value)
 
         # 检查终止条件
         termination_conditions = {
             'max_steps': self._check_max_steps(),
-            'bankruptcy': self._check_bankruptcy(current_value),
-            'max_drawdown': self._check_drawdown(current_value),
-            'daily_loss': self._check_daily_loss(current_value),
+            'bankruptcy': drawdown_achieved,
+            # 'max_drawdown': self._check_drawdown(current_value),
+            # 'daily_loss': self._check_daily_loss(current_value),
             'target_achieved': target_achieved
         }
 
@@ -360,17 +360,19 @@ class TradingEnv(gym.Env):
             self._successful_termination = True
             self._terminated = True
         else:
-            self._terminated = any([
-                termination_conditions['bankruptcy'],
-                termination_conditions['max_drawdown'],
-                termination_conditions['daily_loss']
-            ])
-            if termination_conditions['bankruptcy']:
-                self._termination_reason = f"市值缩水60%"
-            elif termination_conditions['max_drawdown']:
-                self._termination_reason = f"超过最大回撤{self.max_drawdown}"
-            elif termination_conditions['daily_loss']:
-                self._termination_reason = f"超过当日最大回撤{self.daily_loss_limit}"
+            self._terminated = drawdown_achieved
+            self._successful_termination = False
+            # self._terminated = any([
+            #     termination_conditions['bankruptcy'],
+            #     termination_conditions['max_drawdown'],
+            #     termination_conditions['daily_loss']
+            # ])
+            # if termination_conditions['bankruptcy']:
+            #     self._termination_reason = f"市值缩水60%"
+            # elif termination_conditions['max_drawdown']:
+            #     self._termination_reason = f"超过最大回撤{self.max_drawdown}"
+            # elif termination_conditions['daily_loss']:
+            #     self._termination_reason = f"超过当日最大回撤{self.daily_loss_limit}"
 
         self._truncated = termination_conditions['max_steps']
         if self._truncated:
@@ -387,7 +389,7 @@ class TradingEnv(gym.Env):
         return False
 
     def _check_bankruptcy(self, value):
-        return value <= self.portfolio_initial_value * 0.4
+        return (value - self.portfolio_initial_value)/self.portfolio_initial_value  < self.min_target_return
 
     def _check_drawdown(self, value):
         drawdown = (value - self._max_portfolio_value) / \
@@ -416,12 +418,14 @@ class TradingEnv(gym.Env):
         self.history.add(
             idx=self._idx,
             step=self._step,
+            step_progress=self._step / self.max_episode_duration if isinstance(self.max_episode_duration, int) else self._step / len(self.df),
             date=self.current_date,
             position_index=self.positions.index(self._position),
             position=self._position,
             real_position=self.portfolio.position(price),
             data=dict(zip(self._info_columns, self._info_array[self._idx])),
             portfolio_valuation=self.portfolio.valorisation(price),
+            portfolio_return=self.portfolio.valorisation(price)  / self.portfolio_initial_value - 1,
             portfolio_distribution=portfolio_dist,
             price=self._get_price(),
             reward=reward,

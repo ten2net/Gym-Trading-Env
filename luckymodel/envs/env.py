@@ -47,8 +47,8 @@ def calculate_reward(
     # 奖励系数配置
     TARGET_BONUS = 500     # 达成目标的奖励基数
     STOP_LOSS_PENALTY = -200  # 触发止损的惩罚基数
-    TIMEOUT_PENALTY_COEFF = -120  # 超时处罚系数
-    PROFIT_STEP_COEFF = 1.5      # 正向收益的奖励系数
+    TIMEOUT_PENALTY_COEFF = -160  # 超时处罚系数
+    PROFIT_STEP_COEFF = 2.0      # 正向收益的奖励系数
     LOSS_STEP_COEFF = 2.0        # 亏损的惩罚系数
     
     # ========== 核心计算 ==========
@@ -93,7 +93,7 @@ def calculate_reward(
             done = True
     
     # 情况3：达到最大步数
-    elif step >= max_steps - 1:  # 考虑0-based索引
+    elif step >= max_steps :  # 考虑0-based索引
         # 根据最终状态计算处罚,加强超时惩罚（双系数机制）
         print(f"达到最大步数 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
         if current_return >= 0:
@@ -123,8 +123,8 @@ def calculate_reward(
         # print(f"连续亏损惩罚 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
         reward += 0.15 * momentum  # 下跌趋势惩罚  
         consecutive_downs += 1
-        if consecutive_downs > 2:  # 连续4步亏损后启动惩罚
-            penalty = 0.05 * (consecutive_downs -2)**2
+        if consecutive_downs > 3:  # 连续4步亏损后启动惩罚
+            penalty = 0.05 * (consecutive_downs -3)**2
             reward -= penalty 
     else:
         consecutive_downs = 0                         

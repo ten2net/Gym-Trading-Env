@@ -155,6 +155,8 @@ class TradingEnv(gym.Env):
         self._truncated = False
         self._successful_termination = False
         self._termination_reason = ""
+        self.consecutive_ups = 0 # 趋势持续时间计数器，用于添加趋势持续时间奖励
+        self.consecutive_downs = 0 # 趋势持续时间计数器，用于添加趋势持续时间奖励
 
         # 初始化投资组合
         self._init_portfolio()
@@ -274,10 +276,26 @@ class TradingEnv(gym.Env):
             trading_fees=self.trading_fees
         )
 
-    def _calculate_reward(self):
+    def _calculate_reward(self):        
+        current_value: float =  float(self.portfolio.valorisation(self._get_price()) / self.portfolio_initial_value),
+        prev_value: float = float(self.history["portfolio_valuation", -1] / self.portfolio_initial_value),
+        step: int = self._step, 
+        max_steps: int = self.max_episode_duration if isinstance(self.max_episode_duration, int) else len(self.df)        
+        
+        reward, self._terminated, self._truncated, self.consecutive_ups, self.consecutive_downs = self.reward_function(
+            current_value = current_value[0], 
+            prev_value = prev_value[0],
+            step = step[0],
+            max_steps = max_steps,
+            target_profit=self.target_return,
+            consecutive_ups=self.consecutive_ups,
+            consecutive_downs=self.consecutive_downs
+            )
+        return reward
+    def _calculate_reward2(self):
         """分层奖励计算"""
         rewards = {
-            'step':  max(-0.005,self._step_reward()),
+            'step':  self._step_reward(),
             'daily': 0.0, #max(-0.01,round(self._daily_reward(), 4) if self._is_new_day() else 0.0),
             'episode':self._episode_reward()
         }
@@ -285,15 +303,7 @@ class TradingEnv(gym.Env):
         # weights = np.array([0.5, 0.3, 0.2])
         weights = np.array([10.0, 0.0, 1.0])
         total_reward = np.dot(list(rewards.values()), weights)
-        # total_reward = 10*np.clip(total_reward, -2.0, 5.0)
 
-        self.logger.debug(
-            f"Reward components: {rewards} Total: {total_reward:.4f}")
-        # rewards['当前步'] = self._step
-        # rewards['当前日期'] = str(self.current_date.date())
-        # rewards['total_reward'] = round(total_reward,4)
-        # if abs(rewards['daily'])>0 or abs(rewards['episode'])>10:
-        #     print(rewards)
         return total_reward
 
     def _step_reward(self):

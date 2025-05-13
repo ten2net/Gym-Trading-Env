@@ -17,133 +17,119 @@ warnings.filterwarnings("ignore", category=ResourceWarning)
 # Create your own reward function with the history object
 
 
-def reward_function(history):
-    log_return = 100 * np.log(history["portfolio_valuation", -1] /
-                              # log (p_t / p_t-1 )
-                              history["portfolio_valuation", -2])
-    return np.clip(log_return, -0.5, 0.5)
 
-
-def elu(x, alpha=1.0):
-    return np.where(x > 0, x, alpha * (np.exp(x) - 1))
-def layered_reward(history, step: int, 
-                  base_alpha: float = 1.0, 
-                  excess_alpha: float = 1.5, 
-                  scale: float = 1.0,
-                  volatility_window: int = 20,
-                  daily_trading_hours: float = 4.0,  # A股每日交易4小时
-                  minutes_per_bar: int = 5) -> float:
+def calculate_reward(
+    current_value: float,
+    prev_value: float,
+    step: int,
+    max_steps: int = 1024,
+    target_profit: float = 0.15,
+    consecutive_ups: int = 0,
+    consecutive_downs: int = 0
+) -> tuple[float, bool, bool]:
     """
-    分层奖励函数：正策略收益基础奖励 + 正超额收益额外奖励
-    :param base_alpha: 基础奖励系数（建议0.3-1.0）
-    :param excess_alpha: 超额收益奖励系数（建议1.2-2.0）
-    :param scale: 全局奖励缩放因子
-    :param volatility_window: 波动率计算滚动窗口
-    """
-    # 获取关键数据
-    port_init = history["portfolio_valuation", 0]
-    port_current = history["portfolio_valuation", -1]
-    port_prev = history["portfolio_valuation", -2] if step>1 else port_init
-    bench_init = history["data_close", 0]
-    bench_current = history["data_close", -1]
-    bench_prev = history["data_close", -2]  if step>1 else bench_init
-
-    # 计算收益（对数收益率）
-    strategy_now = np.log(port_current / port_prev)
-    # strategy_ret = np.log(port_current / port_init)
-    # bench_ret = np.log(bench_current / bench_init)
-    bench_now = np.log(bench_current / bench_prev)
-    # excess_ret = strategy_ret - bench_ret  # 超额收益
-
-    # 初始化奖励
-    reward_basic =  elu(1000 * base_alpha * strategy_now)
-    reward_ext = elu(1000 * excess_alpha * (strategy_now - bench_now ))
+    强化学习交易策略的奖励计算函数
     
-    reward = (reward_basic + reward_ext) / 1000.0
+    参数：
+    - current_value: 当前资产净值（标准化后的值，初始为1.0）
+    - prev_value: 前一步的资产净值
+    - step: 当前步数（0-based）
+    - max_steps: 最大允许步数
     
-    # if step % 1000 == 0:
-    #     print(f'{strategy_now:.7f} {bench_now:.7f} {reward_basic:.3f} {reward_ext:.3f} {reward:.3f} ')
+    返回：
+    - reward: 当前步的奖励值
+    - done: 是否终止当前回合
+    """
+    # ========== 参数配置 ==========
+    TARGET_PROFIT = target_profit   # 目标收益率15%
+    STOP_LOSS = -0.10      # 最大亏损10%
     
+    # 奖励系数配置
+    TARGET_BONUS = 500     # 达成目标的奖励基数
+    STOP_LOSS_PENALTY = -200  # 触发止损的惩罚基数
+    TIMEOUT_PENALTY_COEFF = -120  # 超时处罚系数
+    PROFIT_STEP_COEFF = 1.5      # 正向收益的奖励系数
+    LOSS_STEP_COEFF = 2.0        # 亏损的惩罚系数
+    
+    # ========== 核心计算 ==========
+    # 计算当前收益状态
+    current_return = current_value - 1.0   # 标准化收益率
+    prev_return = prev_value - 1.0  if prev_value is not None else 0.0
+    
+    done, truncated = False, False
+    reward = 0.0
 
-
-    # # 第一层：策略收益正时基础奖励 ---
-    # if strategy_ret > 0:
-    #     # 基础奖励：双曲正切函数（范围0-1）
-    #     base_reward = np.tanh(base_alpha * strategy_ret)  # 渐进饱和防止过激励
-    #     reward += scale * base_reward
-
-    #     # 第二层：超额收益正时额外奖励 ---
-    #     if excess_ret > 0:
-    #         # 超额奖励：指数增长（强化显著优势）
-    #         excess_reward = np.exp(excess_alpha * excess_ret) - 1
-    #         reward += scale * excess_reward
-    #     else:
-    #         # 跑输基准的轻度惩罚（可选）
-    #         reward -= np.abs(excess_ret)
-    # else:
-    #     # 策略亏损惩罚（线性）
-    #     reward -= np.abs(excess_ret)
-
-    # 波动率惩罚（动态调整窗口） 精确适配A股的波动率年化计算 
-    if step > 15:
-        # 计算A股5分钟K线的年化因子
-        bars_per_day = int((daily_trading_hours * 60) // minutes_per_bar)  # 4h=240m → 240/5=48
-        annualization_factor = np.sqrt(252 * bars_per_day)  # √(252 * 48)=√12096≈109.98
-
-        # 获取组合价值窗口
-        min_window = 5  # 至少需要5根K线
-        window = max(min_window, min(step, volatility_window))
-        port_vals = np.array(history["portfolio_valuation", -window:], dtype=np.float64)
-
-        # 计算年化波动率
-        if len(port_vals) >= 2:
-            log_returns = np.diff(np.log(port_vals))
-            if len(log_returns) > 0:
-                vol_5min = np.std(log_returns)
-                vol_annualized = vol_5min * annualization_factor
-                reward *= np.exp(-1.8 * vol_annualized)  # 波动惩罚项
-
-    return float(np.clip(reward, -2.0, 5.0))  # 限制奖励范围防止数值爆炸      
-
-def cal_max_drawdown(history):
-    # 添加最大回撤
-    # 计算历史数据中投资组合价值的累积最大值
-    peak = np.maximum.accumulate(history['portfolio_valuation'])
-    # 计算最大回撤
-    drawdown = (peak - history['portfolio_valuation']) / peak
-    # 返回最大回撤的百分比值
-    return np.max(drawdown) * 100
-
-
-def one_step_reward(history,
-                    alpha=2.0,
-                    beta=3.0,
-                    gamma=0.5,
-                    max_clip=5.0):
-    """
-    非对称指数奖励函数
-    :param portfolio_return: 投资组合收益率（相对于初始值）
-    :param base_return: 基准收益率阈值（例如1.0表示保本）
-    :param alpha: 正向收益放大系数
-    :param beta: 负向风险惩罚系数
-    :param gamma: 收益饱和系数（控制高收益区间的奖励增长速度）
-    :param max_clip: 奖励最大值截断（防止数值溢出）
-    """
-
-    excess_return = 100 * \
-        np.log(history["portfolio_valuation", -1] /
-               history["portfolio_valuation", -2])
-
-    if excess_return >= 0:
-        # 正向收益：使用修正指数函数控制增长
-        reward = np.sign(excess_return) * \
-            (np.abs(excess_return)**gamma) * alpha
+    # ----------------------------
+    # 基础奖励计算（每步动态奖励）
+    # ----------------------------
+    if current_return >= 0:
+        # 盈利区域：计算相对于目标的进度变化,添加进度限制防止过冲
+        curr_progress = min(current_return / TARGET_PROFIT, 1.2)  # 允许20%超调
+        prev_progress = min(prev_return / TARGET_PROFIT, 1.2) if prev_return >= 0 else 0.0
+        reward += (curr_progress - prev_progress) * PROFIT_STEP_COEFF
     else:
-        # 负向亏损：使用指数惩罚
-        reward = -np.exp(beta * np.abs(excess_return)) + 1
+        # 亏损区域：计算相对于止损线的进度变化
+        curr_loss = min(abs(current_return)/abs(STOP_LOSS), 1.5)  # 允许150%亏损缓冲
+        prev_loss = min(abs(prev_return)/abs(STOP_LOSS), 1.5) if prev_return < 0 else 0.0
+        reward += (prev_loss - curr_loss) * LOSS_STEP_COEFF  # 亏损扩大则惩罚
 
-    # 数值截断
-    return np.clip(reward, -max_clip, max_clip)
+    # ----------------------------
+    # 终止条件判断
+    # ----------------------------
+    # 情况1：达到目标收益
+    if current_return >= TARGET_PROFIT:
+        print(f"达到目标 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        time_decay  = 1 + ((max_steps - step)/max_steps)**3  # 越早完成效率越高
+        reward += TARGET_BONUS * time_decay 
+        done = True
+    
+    # 情况2：触发止损
+    elif current_return <= STOP_LOSS:
+        print(f"触发止损 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        # 添加止损缓冲带（避免噪声触发）
+        if step > max_steps * 0.1:  # 前10%步数不触发止损        
+            time_decay = 1 + (step/max_steps)**3  # 越早触发惩罚越重
+            reward += STOP_LOSS_PENALTY * time_decay
+            done = True
+    
+    # 情况3：达到最大步数
+    elif step >= max_steps - 1:  # 考虑0-based索引
+        # 根据最终状态计算处罚,加强超时惩罚（双系数机制）
+        print(f"达到最大步数 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        if current_return >= 0:
+            distance = abs(current_return - TARGET_PROFIT)
+        else:
+            distance = abs(current_return - STOP_LOSS)
+        
+        reward += distance * TIMEOUT_PENALTY_COEFF * 1.5  # 原1.5倍强化
+        truncated = True
+    # ----------------------------
+    # 添加趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定
+    # 该机制通过识别收益曲线的二阶导数（动量），能有效引导模型：
+    # 在上升趋势中​​保持持仓​​
+    # 在下跌趋势中​​加速止损​​
+    # 在震荡行情中​​减少无效交易
+    # ----------------------------
+    momentum = current_return - prev_return
+    if momentum > 0 and current_return >=0:
+        # print(f"持续盈利奖励 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        reward += 0.35 * momentum  # 上升趋势奖励
+        consecutive_ups += 1
+        reward += 0.05 * consecutive_ups**2
+    else:
+        consecutive_ups = 0  
+              
+    if momentum <0 and current_return <0:
+        # print(f"连续亏损惩罚 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        reward += 0.15 * momentum  # 下跌趋势惩罚  
+        consecutive_downs += 1
+        if consecutive_downs > 2:  # 连续4步亏损后启动惩罚
+            penalty = 0.05 * (consecutive_downs -2)**2
+            reward -= penalty 
+    else:
+        consecutive_downs = 0                         
+
+    return round(reward, 5), done, truncated, consecutive_ups, consecutive_downs
 
 
 def dynamic_feature_last_position_taken(history):
@@ -219,7 +205,7 @@ def make_env(
         name=symbol,
         df=df,
         initial_position=0,  # 'random', #Initial position
-        reward_function=layered_reward,
+        reward_function=calculate_reward,
         # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
         windows=window_size,
         positions=positions,

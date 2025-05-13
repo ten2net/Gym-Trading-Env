@@ -12,9 +12,9 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.utils import get_schedule_fn
 import warnings
 from envs.env import make_env
+from callbacks.profit_curriculum_callback import ProfitCurriculumCallback
 import torch
 
-sys.path.append("../")
 
 warnings.filterwarnings("ignore", category=ResourceWarning)
 warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
@@ -23,8 +23,8 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 def train(symbol_train: str,
           symbol_eval: str,
           window_size: int | None = None,
-          target_return: float = 0.15,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -0.15  # 最小目标收益率，低于视为失败，给予惩罚
+          target_return: float = 0.12,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          min_target_return: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -67,7 +67,7 @@ def train(symbol_train: str,
 
     initial_lr = 1e-6    # 最终学习率（训练结束时）
     final_lr = 1e-4      # 峰值学习率（预热结束后）
-    warmup_ratio = 0.4    # 前30%训练时间用于预热
+    warmup_ratio = 0.2    # 前30%训练时间用于预热
 
     def lr_lambda(progress):
         if progress > (1 - warmup_ratio):  
@@ -90,11 +90,11 @@ def train(symbol_train: str,
         train_env,
         learning_rate= lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
         # policy_kwargs=policy_kwargs,
-        n_steps=1024,
+        n_steps=512,
         batch_size=512,
         n_epochs=10,
-        gamma=0.99,  # 延长收益视野
-        ent_coef=0.01,  # 初始高探索
+        gamma=0.97,  # 延长收益视野
+        ent_coef=0.2,  # 初始高探索
         gae_lambda=0.98,
         verbose=0,
         device=device,
@@ -117,12 +117,16 @@ def train(symbol_train: str,
     #     render=False
     # )
     # progressBarCallback = ProgressBarCallback()
+    
+    # 创建回调实例
+    curriculum_callback = ProfitCurriculumCallback()
 
     model.learn(
-        total_timesteps=8e6,
+        total_timesteps=8e6,  #8_000_000,
         progress_bar=True,
         log_interval=10,
         tb_log_name=f"ppo_new_reward",
+        callback=[curriculum_callback],
         # callback=[eval_callback,
         #           progressBarCallback],
         reset_num_timesteps=True

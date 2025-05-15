@@ -22,7 +22,7 @@ def calculate_reward(
     current_value: float,
     prev_value: float,
     step: int,
-    max_steps: int = 1024,
+    max_steps: int = 480,
     target_profit: float = 0.15,
     consecutive_ups: int = 0,
     consecutive_downs: int = 0
@@ -44,18 +44,23 @@ def calculate_reward(
     TARGET_PROFIT = target_profit   # 目标收益率15%
     STOP_LOSS = -0.10      # 最大亏损10%
     
-    # 奖励系数配置
-    TARGET_BONUS = 500     # 达成目标的奖励基数
-    STOP_LOSS_PENALTY = -200  # 触发止损的惩罚基数
-    TIMEOUT_PENALTY_COEFF = -160  # 超时处罚系数
-    PROFIT_STEP_COEFF = 2.0      # 正向收益的奖励系数
-    LOSS_STEP_COEFF = 2.0        # 亏损的惩罚系数
-    
-    # ========== 核心计算 ==========
     # 计算当前收益状态
     current_return = current_value - 1.0   # 标准化收益率
     prev_return = prev_value - 1.0  if prev_value is not None else 0.0
     
+    # 奖励系数配置    
+    PROFIT_STEP_COEFF = 1.0
+    LOSS_STEP_COEFF = 3 * PROFIT_STEP_COEFF
+    
+    TARGET_BONUS = 60 * PROFIT_STEP_COEFF * (1 - (step/max_steps)**0.6)
+    STOP_LOSS_PENALTY = -10 * LOSS_STEP_COEFF  * (step/max_steps)
+    distance_to_target = (current_return - TARGET_PROFIT) / TARGET_PROFIT
+    TIMEOUT_REWARD_COEFF = 0
+    if distance_to_target > 0.6 :
+       TIMEOUT_REWARD_COEFF = -1 * STOP_LOSS_PENALTY * 1/5 
+    elif distance_to_target< -0.2 :
+        TIMEOUT_REWARD_COEFF = STOP_LOSS_PENALTY
+        
     done, truncated = False, False
     reward = 0.0
 
@@ -69,40 +74,44 @@ def calculate_reward(
         reward += (curr_progress - prev_progress) * PROFIT_STEP_COEFF
     else:
         # 亏损区域：计算相对于止损线的进度变化
-        curr_loss = min(abs(current_return)/abs(STOP_LOSS), 1.5)  # 允许150%亏损缓冲
-        prev_loss = min(abs(prev_return)/abs(STOP_LOSS), 1.5) if prev_return < 0 else 0.0
-        reward += (prev_loss - curr_loss) * LOSS_STEP_COEFF  # 亏损扩大则惩罚
+        curr_loss = min(abs(current_return)/abs(STOP_LOSS), 1.2)  # 允许120%亏损缓冲
+        prev_loss = min(abs(prev_return)/abs(STOP_LOSS), 1.2) if prev_return < 0 else 0.0
+        reward += abs((prev_loss - curr_loss)) * LOSS_STEP_COEFF  # 亏损扩大则惩罚
 
+    # # 增强非线性特征，后期惩罚提升3倍
+    # step_penalty = 0.025 * ((step/max_steps)**2.5)  # 指数从1.5→2.5
+    # reward -= step_penalty * (2 if current_return < TARGET_PROFIT else 1)  # 未达标时双倍惩罚
     # ----------------------------
     # 终止条件判断
     # ----------------------------
     # 情况1：达到目标收益
-    if current_return >= TARGET_PROFIT:
-        print(f"达到目标 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
-        time_decay  = 1 + ((max_steps - step)/max_steps)**3  # 越早完成效率越高
+    if current_return >= TARGET_PROFIT :
+        # print(f"达到目标 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        time_decay = 0.5 + 0.5*(max_steps - step)/max_steps  # 越早完成效率越高
         reward += TARGET_BONUS * time_decay 
         done = True
     
     # 情况2：触发止损
-    elif current_return <= STOP_LOSS:
-        print(f"触发止损 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
-        # 添加止损缓冲带（避免噪声触发）
-        if step > max_steps * 0.1:  # 前10%步数不触发止损        
-            time_decay = 1 + (step/max_steps)**3  # 越早触发惩罚越重
-            reward += STOP_LOSS_PENALTY * time_decay
-            done = True
+    elif current_return <= STOP_LOSS  and step > max_steps * 0.05:
+        # print(f"触发止损 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        time_decay = 0.3 + 0.7*(step/max_steps) # 越早触发惩罚越重
+        reward += STOP_LOSS_PENALTY * time_decay
+        done = True
     
     # 情况3：达到最大步数
     elif step >= max_steps :  # 考虑0-based索引
         # 根据最终状态计算处罚,加强超时惩罚（双系数机制）
-        print(f"达到最大步数 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
+        # print(f"达到最大步数 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
         if current_return >= 0:
-            distance = abs(current_return - TARGET_PROFIT)
+            reward += TIMEOUT_REWARD_COEFF * (current_return / TARGET_PROFIT)
         else:
-            distance = abs(current_return - STOP_LOSS)
-        
-        reward += distance * TIMEOUT_PENALTY_COEFF * 1.5  # 原1.5倍强化
+            reward += TIMEOUT_REWARD_COEFF * (current_return / STOP_LOSS)
         truncated = True
+        
+    # 添加完成速度奖励
+    if done and not truncated:
+        speed_bonus = 200 * (1 - step/(max_steps*0.8))  # 前80%步数完成有额外奖励
+        reward += max(speed_bonus, 0)        
     # ----------------------------
     # 添加趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定
     # 该机制通过识别收益曲线的二阶导数（动量），能有效引导模型：
@@ -111,25 +120,28 @@ def calculate_reward(
     # 在震荡行情中​​减少无效交易
     # ----------------------------
     momentum = current_return - prev_return
-    if momentum > 0 and current_return >=0:
-        # print(f"持续盈利奖励 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
-        reward += 0.35 * momentum  # 上升趋势奖励
-        consecutive_ups += 1
-        reward += 0.05 * consecutive_ups**2
+    momentum_coeff = 0.4 if abs(momentum)<0.005 else 0.8  # 小幅波动时降低敏感性
+    if momentum > 0 :
+        reward += momentum_coeff * momentum  # 上升趋势奖励
+        if current_return >=0:
+            consecutive_ups += 1
+            reward += 0.15 * (consecutive_ups**0.5)  # 连续上涨奖励
+            if consecutive_ups >= 3:
+                reward += 0.5  # 降低持续奖励
     else:
         consecutive_ups = 0  
               
-    if momentum <0 and current_return <0:
-        # print(f"连续亏损惩罚 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
-        reward += 0.15 * momentum  # 下跌趋势惩罚  
-        consecutive_downs += 1
-        if consecutive_downs > 3:  # 连续4步亏损后启动惩罚
-            penalty = 0.05 * (consecutive_downs -3)**2
-            reward -= penalty 
+    if momentum <0:
+        reward += momentum_coeff * momentum  # 下跌趋势惩罚  
+        if current_return <0:
+            consecutive_downs += 1
+            reward -= 0.15 * (consecutive_downs**0.5)  # 连续下跌惩罚
+            if consecutive_downs>=3:
+                reward -= 0.5   
     else:
-        consecutive_downs = 0                         
+        consecutive_downs = 0   
 
-    return round(reward, 5), done, truncated, consecutive_ups, consecutive_downs
+    return round(reward, 6), done, truncated, consecutive_ups, consecutive_downs
 
 
 def dynamic_feature_last_position_taken(history):

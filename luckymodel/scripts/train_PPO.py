@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 def train(symbol_train: str,
           symbol_eval: str,
           window_size: int | None = None,
-          target_return: float = 0.12,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          target_return: float = 0.15,  # 策略目标收益率，超过视为成功完成，给予高额奖励
           min_target_return: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
@@ -33,7 +33,7 @@ def train(symbol_train: str,
         'positions': [0, 0.5, 1],
         'trading_fees': 0.01/100,
         'portfolio_initial_value': 1000000.0,
-        'max_episode_duration': 1024,
+        'max_episode_duration': 48 * 10,
         'target_return': target_return,
         'min_target_return': min_target_return,
         'max_drawdown': -0.8,
@@ -88,14 +88,14 @@ def train(symbol_train: str,
     model = PPO(
         "MlpPolicy",
         train_env,
-        learning_rate= lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
+        learning_rate= 1e-4, #lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
         # policy_kwargs=policy_kwargs,
-        n_steps=512,
-        batch_size=512,
+        n_steps=128,
+        batch_size=128,
         n_epochs=10,
-        gamma=0.97,  # 延长收益视野
-        ent_coef=0.2,  # 初始高探索
-        gae_lambda=0.98,
+        gamma=0.95,  # 延长收益视野
+        ent_coef=0.02,  # 初始高探索
+        # gae_lambda=0.98,
         verbose=0,
         device=device,
         seed=42,
@@ -126,7 +126,7 @@ def train(symbol_train: str,
         progress_bar=True,
         log_interval=10,
         tb_log_name=f"ppo_new_reward",
-        callback=[curriculum_callback],
+        # callback=[curriculum_callback],
         # callback=[eval_callback,
         #           progressBarCallback],
         reset_num_timesteps=True

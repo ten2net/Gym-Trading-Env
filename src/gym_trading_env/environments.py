@@ -171,7 +171,7 @@ class TradingEnv(gym.Env):
         self.history.set(
             idx=self._idx,
             step=self._step,
-            step_progress=self._step / self.max_episode_duration if isinstance(self.max_episode_duration, int) else self._step / len(self.df),
+            step_progress=(1 - self._step / self.max_episode_duration) if isinstance(self.max_episode_duration, int) else (1-self._step / len(self.df)),
             date=self.current_date,
             position_index=self.positions.index(self._position),
             position=self._position,
@@ -250,7 +250,7 @@ class TradingEnv(gym.Env):
         self._step += 1
 
         # 在更新历史记录前检查终止状态
-        self._check_termination()
+        # self._check_termination()
 
         # 在更新历史记录前计算奖励
         reward = self._calculate_reward()

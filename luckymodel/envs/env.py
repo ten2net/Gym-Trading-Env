@@ -51,7 +51,7 @@ def calculate_reward(
     momentum = current_return - prev_return
     
     # 奖励系数配置    
-    PROFIT_STEP_COEFF = 1.0
+    PROFIT_STEP_COEFF = 2.0
     LOSS_STEP_COEFF = 2 * PROFIT_STEP_COEFF    
     TARGET_BONUS_BASE = 60 * PROFIT_STEP_COEFF
     STOP_LOSS_PENALTY_BASE = -10 * LOSS_STEP_COEFF
@@ -85,7 +85,7 @@ def calculate_reward(
     # 情况2：触发止损
     elif current_return <= STOP_LOSS :
         # print(f"触发止损 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
-        time_decay = 0.3 + 0.7*(step/max_steps) # 越早触发惩罚越重
+        time_decay = 0.3 + 0.7*(max_steps - step)/max_steps # 越早触发惩罚越重
         reward += STOP_LOSS_PENALTY_BASE  * time_decay
         done = True
     rewards.append(reward)
@@ -97,17 +97,17 @@ def calculate_reward(
         else:
             reward += STOP_LOSS_PENALTY_BASE  * (current_return / STOP_LOSS)
             
-        if current_return < TARGET_PROFIT:  # 🌟 未达标追加惩罚
-            reward -= 25 * (1 - current_return/TARGET_PROFIT)  # 离目标越远惩罚越大            
+        # if current_return < TARGET_PROFIT:  # 🌟 未达标追加惩罚
+        #     reward -= 1 * (1 - current_return/TARGET_PROFIT)  # 离目标越远惩罚越大            
         truncated = True
     rewards.append(reward)    
     # 添加完成速度奖励
-    if done and not truncated:
-        speed_bonus = 400 * max(1 - (step / (max_steps * 0.8))**0.8, 0) # 前80%步数完成有额外奖励
-        reward += max(speed_bonus, 0)  
+    if done and current_return >= TARGET_PROFIT and not truncated:
+        speed_bonus = 200 * max(1 - (step / (max_steps * 0.8))**0.8, 0) # 前80%步数完成有额外奖励
+        reward += max(speed_bonus, 1)  
         # 使用指数衰减代替幂衰减，前30%步数奖励更高
-        # speed_bonus = 400 * np.exp(-3.0 * step/(max_steps*0.3))  
-        # reward += max(speed_bonus, 50)  # 设置最低奖励保障              
+        # speed_bonus = 10 * np.exp(-3.0 * step/(max_steps*0.7))  
+        # reward += max(speed_bonus, 10)  # 设置最低奖励保障              
     rewards.append(reward)
     # ----------------------------
     # 趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定
@@ -143,13 +143,13 @@ def calculate_reward(
             reward -= 0.8 
     rewards.append(reward)
     # 在所有奖励计算完成后添加比例约束（保持总奖励在合理范围）🌟
-    total_abs = abs(reward)
-    # print(reward,  rewards)
-    if total_abs > 0:
-        for component in rewards:
-            ratio = abs(component)/total_abs
-            if ratio > 0.6:  # 限制单项占比不超过60%
-                reward = reward * 0.6/ratio
+    # total_abs = abs(reward)
+    # # print(reward,  rewards)
+    # if total_abs > 0:
+    #     for component in rewards:
+    #         ratio = abs(component)/total_abs
+    #         if ratio > 0.6:  # 限制单项占比不超过60%
+    #             reward = reward * 0.6/ratio
 
     return round(reward, 6), done, truncated, new_ups, new_downs
 

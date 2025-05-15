@@ -52,16 +52,15 @@ def calculate_reward(
     
     # 奖励系数配置    
     PROFIT_STEP_COEFF = 1.0
-    LOSS_STEP_COEFF = 2 * PROFIT_STEP_COEFF
-    
+    LOSS_STEP_COEFF = 2 * PROFIT_STEP_COEFF    
     TARGET_BONUS_BASE = 60 * PROFIT_STEP_COEFF
-    # TARGET_BONUS = TARGET_BONUS_BASE * (1 - (step/max_steps)**0.4)
     STOP_LOSS_PENALTY_BASE = -10 * LOSS_STEP_COEFF
+    # TARGET_BONUS = TARGET_BONUS_BASE * (1 - (step/max_steps)**0.4)
     # STOP_LOSS_PENALTY = STOP_LOSS_PENALTY_BASE * (step/max_steps)**1.2
 
     done, truncated = False, False
     reward = 0.0
-
+    rewards = []
     # ----------------------------
     # 基础奖励计算（每步动态奖励）
     # ----------------------------
@@ -75,7 +74,7 @@ def calculate_reward(
         curr_loss = current_return/STOP_LOSS
         prev_loss = prev_return/STOP_LOSS if prev_return < 0 else 0.0
         reward -= (curr_loss - prev_loss) * LOSS_STEP_COEFF  # 亏损扩大则惩罚
- 
+    rewards.append(reward)
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT :
         # print(f"达到目标 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
@@ -89,23 +88,29 @@ def calculate_reward(
         time_decay = 0.3 + 0.7*(step/max_steps) # 越早触发惩罚越重
         reward += STOP_LOSS_PENALTY_BASE  * time_decay
         done = True
-    
+    rewards.append(reward)
     # 情况3：达到最大步数
-    elif step >= max_steps :  # 考虑0-based索引
+    if step >= max_steps :  # 考虑0-based索引
         # print(f"{step} {reward:.4f} {current_return:.4f} {prev_return: .4f} ")
         if current_return >= 0:
             reward += TARGET_BONUS_BASE  * (current_return / TARGET_PROFIT)
         else:
             reward += STOP_LOSS_PENALTY_BASE  * (current_return / STOP_LOSS)
+            
+        if current_return < TARGET_PROFIT:  # 🌟 未达标追加惩罚
+            reward -= 25 * (1 - current_return/TARGET_PROFIT)  # 离目标越远惩罚越大            
         truncated = True
-        
+    rewards.append(reward)    
     # 添加完成速度奖励
     if done and not truncated:
         speed_bonus = 400 * max(1 - (step / (max_steps * 0.8))**0.8, 0) # 前80%步数完成有额外奖励
-        reward += max(speed_bonus, 0)        
+        reward += max(speed_bonus, 0)  
+        # 使用指数衰减代替幂衰减，前30%步数奖励更高
+        # speed_bonus = 400 * np.exp(-3.0 * step/(max_steps*0.3))  
+        # reward += max(speed_bonus, 50)  # 设置最低奖励保障              
+    rewards.append(reward)
     # ----------------------------
-    # 添加趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定
-    # 该机制通过识别收益曲线的二阶导数（动量），能有效引导模型：
+    # 趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定
     # 在上升趋势中​​保持持仓​​
     # 在下跌趋势中​​加速止损​​
     # 在震荡行情中​​减少无效交易
@@ -121,17 +126,30 @@ def calculate_reward(
     else:
         new_ups, new_downs = 0, 0
         
-    momentum_coeff = 0.4 if abs(momentum)<0.005 else 0.8  # 小幅波动时降低敏感性
+    # 根据训练进度动态调整系数（后期降低动量敏感性）🌟
+    progress_ratio = step / max_steps
+    momentum_coeff = 0.3 + 0.5*(1 - progress_ratio)  # 初始0.8，后期降至0.3
+    if abs(momentum) < 0.005:
+        momentum_coeff *= 0.5  # 小幅波动额外降低敏感性    
     reward += momentum_coeff * momentum  # 动量直接影响奖励
     # 连续趋势奖励
     if new_ups > 0:
-        reward += 0.15 * (new_ups ** 0.5)
+        reward += 0.25 * (new_ups ** 0.5)
         if new_ups >= 3:
-            reward += 0.5
+            reward += 0.8
     elif new_downs > 0:
-        reward -= 0.15 * (new_downs ** 0.5)
+        reward -= 0.25 * (new_downs ** 0.5)
         if new_downs >= 3:
-            reward -= 0.5 
+            reward -= 0.8 
+    rewards.append(reward)
+    # 在所有奖励计算完成后添加比例约束（保持总奖励在合理范围）🌟
+    total_abs = abs(reward)
+    # print(reward,  rewards)
+    if total_abs > 0:
+        for component in rewards:
+            ratio = abs(component)/total_abs
+            if ratio > 0.6:  # 限制单项占比不超过60%
+                reward = reward * 0.6/ratio
 
     return round(reward, 6), done, truncated, new_ups, new_downs
 

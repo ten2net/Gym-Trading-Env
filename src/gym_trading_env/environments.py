@@ -228,15 +228,6 @@ class TradingEnv(gym.Env):
                                         v in self.results_metrics.items()))
 
     def step(self, action):
-        if self._terminated or self._truncated:
-            # 返回当前状态但不再更新
-            return (
-                self._get_obs(),  # 保持最后有效观察值
-                0.0,              # 奖励置零
-                self._terminated,
-                self._truncated,
-                self.history[-1] if self.history else {}
-            )
 
         # 执行交易
         self._execute_trade(action)

@@ -14,10 +14,6 @@ import argparse
 
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
-# Create your own reward function with the history object
-
-
-
 def calculate_reward(
     current_value: float,
     prev_value: float,
@@ -170,10 +166,8 @@ def make_env(
     trading_fees: float = 0.01/100,  # 0.01% per stock buy / sell
     portfolio_initial_value: float = 1000000.0,  # in FIAT (here, YMB)
     max_episode_duration: int | Literal["max"] = 48 * 22,  # "max" ,# 500,
-    target_return: float = 0.3,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-    min_target_return: float = 0.05,  # 最小目标收益率，低于视为失败，给予惩罚
-    max_drawdown: float = -0.3,
-    daily_loss_limit: float = -0.1,
+    target_return: float = 0.15,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+    stop_loss: float = -0.10,  # 止损，低于视为失败，给予惩罚
     render_mode: Literal["logs", "human"] = "logs",
     verbose: Literal[0, 1, 2] = 1
 ):
@@ -235,9 +229,7 @@ def make_env(
         portfolio_initial_value=portfolio_initial_value,
         max_episode_duration=max_episode_duration,
         target_return=target_return,
-        min_target_return=min_target_return,
-        max_drawdown=max_drawdown,
-        daily_loss_limit=daily_loss_limit,
+        stop_loss=stop_loss,
         disable_env_checker=True,
         render_mode=render_mode,
         verbose=verbose

@@ -24,7 +24,7 @@ def train(symbol_train: str,
           symbol_eval: str,
           window_size: int | None = None,
           target_return: float = 0.15,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
+          stop_loss: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
           ):
     # 定义公共环境参数
     common_env_params = {
@@ -35,9 +35,7 @@ def train(symbol_train: str,
         'portfolio_initial_value': 1000000.0,
         'max_episode_duration': 48 * 10,
         'target_return': target_return,
-        'min_target_return': min_target_return,
-        'max_drawdown': -0.8,
-        'daily_loss_limit': -0.8,
+        'stop_loss': stop_loss,
         'render_mode': "logs",
         'verbose': 0
     }
@@ -50,7 +48,7 @@ def train(symbol_train: str,
     # 创建评估环境（可添加评估特有的参数）
     eval_env = make_env(
         symbol=symbol_eval,
-        **{**common_env_params, 'max_drawdown': -0.8}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
+        **{**common_env_params, 'stop_loss': -0.08}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
     # 使用PPO算法训练模型
     # initial_lr = 1e-6

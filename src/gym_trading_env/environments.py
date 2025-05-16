@@ -43,9 +43,7 @@ class TradingEnv(gym.Env):
         initial_position: str = 'random',
         max_episode_duration: Any = 'max',
         target_return: float = 0.3,
-        min_target_return=0.05,
-        daily_loss_limit: float = -0.03,
-        max_drawdown: float = -0.05,
+        stop_loss=-0.10,
         name: str = "Stock",
         render_mode: Optional[str] = None,
         verbose: int = 1
@@ -88,9 +86,7 @@ class TradingEnv(gym.Env):
         self.initial_position = params['initial_position']
         self.render_mode = params['render_mode']
         self.target_return = params['target_return']
-        self.min_target_return = params['min_target_return']
-        self.daily_loss_limit = params['daily_loss_limit']
-        self.max_drawdown = params['max_drawdown']
+        self.stop_loss = params['stop_loss']
 
         self.log_metrics = []
 
@@ -288,135 +284,11 @@ class TradingEnv(gym.Env):
             step = step[0],
             max_steps = max_steps,
             target_profit=self.target_return,
+            stop_loss=self.stop_loss,
             consecutive_ups=self.consecutive_ups,
             consecutive_downs=self.consecutive_downs
             )
         return reward
-    def _calculate_reward2(self):
-        """分层奖励计算"""
-        rewards = {
-            'step':  self._step_reward(),
-            'daily': 0.0, #max(-0.01,round(self._daily_reward(), 4) if self._is_new_day() else 0.0),
-            'episode':self._episode_reward()
-        }
-        # 加权综合
-        # weights = np.array([0.5, 0.3, 0.2])
-        weights = np.array([10.0, 0.0, 1.0])
-        total_reward = np.dot(list(rewards.values()), weights)
-
-        return total_reward
-
-    def _step_reward(self):
-        return self.reward_function(history = self.history, step = self._step)
-
-    # def _daily_reward(self):
-    #     daily_return = np.log(self._day_close_value / self._day_open_value)
-    #     volatility = self._daily_volatility()
-    #     return daily_return - 0.25 * volatility
-
-    # def _daily_volatility(self):
-    #     # 获取当日所有净值记录
-    #     day_values = [entry['portfolio_value']
-    #                   for entry in self.history
-    #                   if entry['date'].date() == self.current_date.date()]
-    #     if len(day_values) < 2:
-    #         return 0.0
-
-    #     log_returns = np.diff(np.log(day_values))
-    #     return np.std(log_returns)
-
-    def _episode_reward(self):
-        final_value = self.portfolio.valorisation(self._get_price())
-        total_return = (final_value / self.portfolio_initial_value) - 1
-
-        if self._terminated:
-            # 目标达成奖励
-            if self._successful_termination:
-                excess_return = total_return - self.target_return
-                return 4.0 + 100.0 * excess_return 
-            else:
-                # 未达成惩罚
-                excess_return = self.min_target_return - total_return
-                return -1.0 + 100.0 * excess_return
-        elif self._truncated:
-            return -0.5
-        else:
-            return 0.0
-              
-    def _check_termination(self):
-        current_value = self.portfolio.valorisation(self._get_price())
-
-        # 更新最大净值
-        self._max_portfolio_value = max(
-            self._max_portfolio_value, current_value)
-
-        # 计算总收益率
-        total_return = current_value / self.portfolio_initial_value - 1
-
-        # 策略目标达成检查
-        target_achieved = total_return >= self.target_return
-        # 策略回撤检查
-        drawdown_achieved = self._check_bankruptcy(current_value)
-
-        # 检查终止条件
-        termination_conditions = {
-            'max_steps': self._check_max_steps(),
-            'bankruptcy': drawdown_achieved,
-            # 'max_drawdown': self._check_drawdown(current_value),
-            # 'daily_loss': self._check_daily_loss(current_value),
-            'target_achieved': target_achieved
-        }
-
-        # 优先级设置：目标达成优先于其他失败条件
-        if target_achieved:
-            self._terminated = True
-            self._termination_reason = "策略目标达成"
-            self._successful_termination = True
-            self._truncated = False
-        else:
-            self._terminated = drawdown_achieved
-            self._termination_reason = f"超过最大回撤{self.min_target_return}" if drawdown_achieved else ""
-            self._successful_termination = False
-            self._truncated = False
-            # self._terminated = any([
-            #     termination_conditions['bankruptcy'],
-            #     termination_conditions['max_drawdown'],
-            #     termination_conditions['daily_loss']
-            # ])
-            # if termination_conditions['bankruptcy']:
-            #     self._termination_reason = f"市值缩水60%"
-            # elif termination_conditions['max_drawdown']:
-            #     self._termination_reason = f"超过最大回撤{self.max_drawdown}"
-            # elif termination_conditions['daily_loss']:
-            #     self._termination_reason = f"超过当日最大回撤{self.daily_loss_limit}"
-
-        self._truncated = termination_conditions['max_steps']
-        if self._truncated:
-            self._terminated = False
-            self._termination_reason = f"超过最大步数{self.max_episode_duration}"
-            self._successful_termination = False
-
-        if self._terminated or self._truncated:
-            # 记录最终指标
-            self._log_metrics()
-            self.logger.info(f"Episode terminated: {termination_conditions}")
-
-    def _check_max_steps(self):
-        if isinstance(self.max_episode_duration, int):
-            return self._step >= self.max_episode_duration
-        return False
-
-    def _check_bankruptcy(self, value):
-        return (value - self.portfolio_initial_value)/self.portfolio_initial_value  < self.min_target_return
-
-    def _check_drawdown(self, value):
-        drawdown = (value - self._max_portfolio_value) / \
-            self._max_portfolio_value
-        return drawdown <= self.max_drawdown
-
-    def _check_daily_loss(self, value):
-        daily_return = (value - self._day_open_value) / self._day_open_value
-        return daily_return <= self.daily_loss_limit
 
     def _handle_new_day(self):
         self._day_open_value = self.portfolio.valorisation(

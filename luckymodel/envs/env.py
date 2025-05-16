@@ -71,22 +71,23 @@ def calculate_reward(
         prev_loss = prev_return/STOP_LOSS if prev_return < 0 else 0.0
         reward -= (curr_loss - prev_loss) * LOSS_STEP_COEFF  # 亏损扩大则惩罚
     rewards.append(reward)
+    
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT :
         # print(f"达到目标 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
         time_decay = 0.5 + 0.5*(max_steps - step)/max_steps  # 越早完成效率越高
         reward += TARGET_BONUS_BASE * time_decay 
         done = True
-    
+        rewards.append(reward)
     # 情况2：触发止损
     elif current_return <= STOP_LOSS :
         # print(f"触发止损 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
         time_decay = 0.3 + 0.7*(max_steps - step)/max_steps # 越早触发惩罚越重
         reward += STOP_LOSS_PENALTY_BASE  * time_decay
         done = True
-    rewards.append(reward)
+        rewards.append(reward)
     # 情况3：达到最大步数
-    if step >= max_steps :  # 考虑0-based索引
+    elif step >= max_steps :  # 考虑0-based索引
         # print(f"{step} {reward:.4f} {current_return:.4f} {prev_return: .4f} ")
         if current_return >= 0:
             reward += TARGET_BONUS_BASE  * (current_return / TARGET_PROFIT)
@@ -96,7 +97,7 @@ def calculate_reward(
         # if current_return < TARGET_PROFIT:  # 🌟 未达标追加惩罚
         #     reward -= 1 * (1 - current_return/TARGET_PROFIT)  # 离目标越远惩罚越大            
         truncated = True
-    rewards.append(reward)    
+        rewards.append(reward)    
     # 添加完成速度奖励
     if done and current_return >= TARGET_PROFIT and not truncated:
         speed_bonus = 200 * max(1 - (step / (max_steps * 0.8))**0.8, 0) # 前80%步数完成有额外奖励

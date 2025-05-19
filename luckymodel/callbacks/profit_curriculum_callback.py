@@ -1,5 +1,15 @@
 from stable_baselines3.common.callbacks import BaseCallback
 
+
+class EpisodeMetricsCallback(BaseCallback):
+    def _on_step(self) -> bool:
+        for info in self.locals["infos"]:
+            if "episode" in info:
+                episode_data = info["episode"]
+                # 记录奖励和长度
+                self.logger.record("rollout/ep_rew_mean", episode_data["r"])
+                self.logger.record("rollout/ep_len_mean", episode_data["l"])
+        return True
 # 自定义课程学习回调
 class ProfitCurriculumCallback(BaseCallback):
     def __init__(self, verbose=0):

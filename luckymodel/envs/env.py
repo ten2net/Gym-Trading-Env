@@ -46,16 +46,22 @@ def calculate_reward(
     current_return = current_value - 1.0   # 标准化收益率
     prev_return = prev_value - 1.0  if prev_value is not None else 0.0
     momentum = current_return - prev_return
+    # 更新连续上涨/下跌次数
+    new_ups, new_downs = consecutive_ups, consecutive_downs    
     
     # 奖励系数配置    
     PROFIT_STEP_COEFF = 1.0
-    LOSS_STEP_COEFF = 1.05 * PROFIT_STEP_COEFF    
-    TARGET_BONUS_BASE = 50 * PROFIT_STEP_COEFF
-    STOP_LOSS_PENALTY_BASE = -10 * LOSS_STEP_COEFF
+    LOSS_STEP_COEFF = 0.8 * PROFIT_STEP_COEFF    
+    TARGET_BONUS_BASE = 25 * PROFIT_STEP_COEFF
+    STOP_LOSS_PENALTY_BASE = -8 * LOSS_STEP_COEFF
 
     done, truncated = False, False
     reward = 0.0
     rewards = []
+    
+    # 动态进度感知衰减
+    progress_ratio = step / max_steps
+    DYNAMIC_COEFF = 1.8 / (1 + np.exp(6*(progress_ratio - 0.7)))  # 关键点0.7步时开始衰减
     # ----------------------------
     # 基础奖励
     # ----------------------------
@@ -63,82 +69,53 @@ def calculate_reward(
         # 计算收益进度变化
         curr_progress = current_return / TARGET_PROFIT
         prev_progress = prev_return / TARGET_PROFIT if prev_return >= 0 else 0.0
-        reward += (curr_progress - prev_progress) * PROFIT_STEP_COEFF
+        # 引入加速奖励：后期进度变化奖励加倍
+        reward += (curr_progress - prev_progress) *  PROFIT_STEP_COEFF * DYNAMIC_COEFF
     else:
         # 计算亏损进度变化（相对止损）
-        curr_loss = current_return/STOP_LOSS  # 限制亏损放大系数
+        curr_loss = current_return/STOP_LOSS 
         prev_loss =prev_return/STOP_LOSS if prev_return<0 else 0.0
-        # curr_loss = min(current_return/STOP_LOSS, 1.2)  # 限制亏损放大系数
-        # prev_loss = min(prev_return/STOP_LOSS, 1.2) if prev_return<0 else 0.0
-        reward -= (curr_loss - prev_loss) * LOSS_STEP_COEFF  # 降低亏损变化敏感性
-    rewards.append(reward)
+        # 添加损失变化的平滑处理
+        loss_change = min(curr_loss - prev_loss, 0.15)
+        reward -= loss_change * LOSS_STEP_COEFF
     
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT :
-        # print(f"达到目标 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
-        time_decay = 0.5 + 0.5*(max_steps - step)/max_steps  # 越早完成效率越高
-        reward += TARGET_BONUS_BASE * time_decay 
+        # 增加时间奖励递减因子 
+        time_bonus = TARGET_BONUS_BASE * (1 - 0.5*progress_ratio) 
+        reward += time_bonus
         done = True
-        rewards.append(reward)
     # 情况2：触发止损
     elif current_return <= STOP_LOSS :
-        # print(f"触发止损 {step} {current_return:.4f} {prev_return: .4f} {TARGET_PROFIT: .2f}  {STOP_LOSS: .2f}")
-        time_decay = 0.3 + 0.7*(max_steps - step)/max_steps # 越早触发惩罚越重
-        reward += STOP_LOSS_PENALTY_BASE  * time_decay 
+        # 动态止损惩罚：后期惩罚加倍
+        reward += STOP_LOSS_PENALTY_BASE * (1 + progress_ratio*0.8)
         done = True
-        rewards.append(reward)
     # 情况3：达到最大步数
-    elif step >= max_steps :  # 考虑0-based索引
-        # 当前修改部分
-        time_penalty =  (current_return/TARGET_PROFIT if current_return>0 
-                            else current_return/STOP_LOSS)
-        reward += STOP_LOSS_PENALTY_BASE * time_penalty * 10            
-        truncated = True
-        done = True
-        rewards.append(reward)    
-    # 添加完成速度奖励
-    if done and current_return >= TARGET_PROFIT and not truncated:
-        # 使用双阶段指数衰减：前50%步数高奖励，后50%快速衰减
-        if step <= max_steps*0.5:
-            speed_bonus = 300 * np.exp(-3.0*step/(max_steps*0.5))
+    elif step >= max_steps - 1 :  # 考虑0-based索引
+        # 终点惩罚梯度重构
+        if current_return > 0:
+            # 进度奖励指数增长 
+            reward += TARGET_BONUS_BASE * (current_return/TARGET_PROFIT)**2 * 2
         else:
-            speed_bonus = 250 * np.exp(-8.0*(step-max_steps*0.5)/(max_steps*0.5))
-        reward += max(speed_bonus, 50)  # 最低保障30         
-    rewards.append(reward)
-    # ----------------------------
-    # 趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定
-    # 在上升趋势中​​保持持仓​​
-    # 在下跌趋势中​​加速止损​​
-    # 在震荡行情中​​减少无效交易
-    # ----------------------------
-    # 更新连续上涨/下跌次数
-    new_ups, new_downs = consecutive_ups, consecutive_downs
-    if momentum > 0:
-        new_ups += 1
-        new_downs = 0
-    elif momentum < 0:
-        new_downs += 1
-        new_ups = 0
-    else:
-        new_ups, new_downs = 0, 0
-        
+            # 亏损惩罚立方增长
+            reward += 3 * STOP_LOSS_PENALTY_BASE * (abs(current_return)/STOP_LOSS)**3         
+        truncated = True
+    else:         
+        # ----------------------------
+        # 趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定 # 在上升趋势中​​保持持仓​​   # 在下跌趋势中​​加速止损​​    # 在震荡行情中​​减少无效交易
+        # ----------------------------
 
-    # 计算趋势阶段系数（动态衰减）
-    # progress_ratio = step / max_steps
-    # momentum_coeff = 0.6 + 0.3*(1 - progress_ratio)  # 初始0.6，后期降至0.3
-    # if abs(momentum) < 0.003:
-    #     momentum_coeff *= 0.3  # 小幅波动额外降低敏感性    
-    # reward += momentum_coeff * momentum  # 动量直接影响奖励
-    # 连续趋势奖励
-    if new_ups > 0:
-        reward += 0.025 * (new_ups ** 0.95)
-        if new_ups >= 3:
-            reward += 0.1
-    elif new_downs > 0:
-        reward -= 0.025 * (new_downs ** 1.05)
-        if new_downs >= 3:
-            reward -= 0.1 
-    rewards.append(reward)
+        if momentum > 0:
+            new_ups += 1
+            new_downs = 0
+        else: # 不增长视为下跌
+            new_downs += 1
+            new_ups = 0
+
+        if new_ups > 0:
+            reward +=  (1 - progress_ratio) ** new_ups
+        if new_downs > 0:
+            reward -=  (1 - progress_ratio) ** new_downs 
 
     return round(reward, 6), done, truncated, new_ups, new_downs
 

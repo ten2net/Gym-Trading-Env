@@ -12,9 +12,10 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.utils import get_schedule_fn
 import warnings
 from envs.env import make_env
-from callbacks.profit_curriculum_callback import ProfitCurriculumCallback
+from callbacks.profit_curriculum_callback import ProfitCurriculumCallback,EpisodeMetricsCallback
 import torch
-
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from gymnasium.wrappers import RecordEpisodeStatistics
 
 warnings.filterwarnings("ignore", category=ResourceWarning)
 warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
@@ -44,6 +45,12 @@ def train(symbol_train: str,
         symbol=symbol_train,
         **common_env_params
     )
+    
+    # 创建环境并包装为 VecNormalize
+    base_env = RecordEpisodeStatistics(train_env)  # 关键步骤！
+    train_env = DummyVecEnv([lambda: base_env])
+    train_env = VecNormalize(train_env, norm_obs=True, norm_reward=False)
+   
 
     # 创建评估环境（可添加评估特有的参数）
     eval_env = make_env(
@@ -83,6 +90,8 @@ def train(symbol_train: str,
 
     device = "cpu" #'cuda' if torch.cuda.is_available() else 'cpu'
     print("torch.cuda.is_available()=", torch.cuda.is_available())
+    # net_arch = [ {"pi": [256,256], "vf": [256,256]} ]
+
     model = PPO(
         "MlpPolicy",
         train_env,
@@ -94,6 +103,7 @@ def train(symbol_train: str,
         gamma=0.95,  # 延长收益视野
         ent_coef=0.02,  # 初始高探索
         # gae_lambda=0.98,
+        # policy_kwargs={'net_arch': net_arch},
         verbose=0,
         device=device,
         seed=42,
@@ -118,12 +128,13 @@ def train(symbol_train: str,
     
     # 创建回调实例
     curriculum_callback = ProfitCurriculumCallback()
-
+      
     model.learn(
         total_timesteps=8e6,  #8_000_000,
         progress_bar=True,
         log_interval=10,
         tb_log_name=f"ppo_new_reward",
+        callback=[EpisodeMetricsCallback()],
         # callback=[curriculum_callback],
         # callback=[eval_callback,
         #           progressBarCallback],

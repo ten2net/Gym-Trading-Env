@@ -82,13 +82,13 @@ def calculate_reward(
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT :
         # 增加时间奖励递减因子 
-        time_bonus = TARGET_BONUS_BASE * (1 - 0.5*progress_ratio) 
+        time_bonus = TARGET_BONUS_BASE + TARGET_BONUS_BASE * (1 - 0.9* progress_ratio) 
         reward += time_bonus
         done = True
     # 情况2：触发止损
     elif current_return <= STOP_LOSS :
         # 动态止损惩罚：后期惩罚加倍
-        reward += STOP_LOSS_PENALTY_BASE * (1 + progress_ratio*0.8)
+        reward += STOP_LOSS_PENALTY_BASE + STOP_LOSS_PENALTY_BASE * (1 + progress_ratio)
         done = True
     # 情况3：达到最大步数
     elif step >= max_steps - 1 :  # 考虑0-based索引

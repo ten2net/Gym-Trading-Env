@@ -52,8 +52,8 @@ def calculate_reward(
     # 奖励系数配置    
     PROFIT_STEP_COEFF = 1.0
     LOSS_STEP_COEFF = 0.8 * PROFIT_STEP_COEFF    
-    TARGET_BONUS_BASE = 25 * PROFIT_STEP_COEFF
-    STOP_LOSS_PENALTY_BASE = -8 * LOSS_STEP_COEFF
+    TARGET_BONUS_BASE = 100 * PROFIT_STEP_COEFF
+    STOP_LOSS_PENALTY_BASE = -80 * LOSS_STEP_COEFF
 
     done, truncated = False, False
     reward = 0.0
@@ -62,43 +62,43 @@ def calculate_reward(
     # 动态进度感知衰减
     progress_ratio = step / max_steps
     DYNAMIC_COEFF = 1.8 / (1 + np.exp(6*(progress_ratio - 0.7)))  # 关键点0.7步时开始衰减
-    # ----------------------------
-    # 基础奖励
-    # ----------------------------
-    if current_return >= 0:
-        # 计算收益进度变化
-        curr_progress = current_return / TARGET_PROFIT
-        prev_progress = prev_return / TARGET_PROFIT if prev_return >= 0 else 0.0
-        # 引入加速奖励：后期进度变化奖励加倍
-        reward += (curr_progress - prev_progress) *  PROFIT_STEP_COEFF * DYNAMIC_COEFF
-    else:
-        # 计算亏损进度变化（相对止损）
-        curr_loss = current_return/STOP_LOSS 
-        prev_loss =prev_return/STOP_LOSS if prev_return<0 else 0.0
-        # 添加损失变化的平滑处理
-        loss_change = min(curr_loss - prev_loss, 0.15)
-        reward -= loss_change * LOSS_STEP_COEFF
+    # # ----------------------------
+    # # 基础奖励
+    # # ----------------------------
+    # if current_return >= 0:
+    #     # 计算收益进度变化
+    #     curr_progress = current_return / TARGET_PROFIT
+    #     prev_progress = prev_return / TARGET_PROFIT if prev_value is not None else 0.0
+    #     # 引入加速奖励：后期进度变化奖励加倍
+    #     reward += abs(curr_progress - prev_progress) *  PROFIT_STEP_COEFF * DYNAMIC_COEFF
+    # else:
+    #     # 计算亏损进度变化（相对止损）
+    #     curr_loss = current_return/STOP_LOSS 
+    #     prev_loss =prev_return/STOP_LOSS if prev_value is not None else 0.0
+    #     # 添加损失变化的平滑处理
+    #     loss_change = abs(curr_loss - prev_loss)
+    #     reward -= loss_change * LOSS_STEP_COEFF
     
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT :
         # 增加时间奖励递减因子 
-        time_bonus = TARGET_BONUS_BASE + TARGET_BONUS_BASE * (1 - 0.9* progress_ratio) 
+        time_bonus = TARGET_BONUS_BASE + TARGET_BONUS_BASE * (2 - progress_ratio) ** 3
         reward += time_bonus
         done = True
     # 情况2：触发止损
     elif current_return <= STOP_LOSS :
         # 动态止损惩罚：后期惩罚加倍
-        reward += STOP_LOSS_PENALTY_BASE + STOP_LOSS_PENALTY_BASE * (1 + progress_ratio)
+        reward += STOP_LOSS_PENALTY_BASE + STOP_LOSS_PENALTY_BASE * (1 + progress_ratio) ** 2
         done = True
     # 情况3：达到最大步数
-    elif step >= max_steps - 1 :  # 考虑0-based索引
+    elif step >= max_steps :  # 考虑0-based索引
         # 终点惩罚梯度重构
         if current_return > 0:
             # 进度奖励指数增长 
-            reward += TARGET_BONUS_BASE * (current_return/TARGET_PROFIT)**2 * 2
+            reward += TARGET_BONUS_BASE * (1 + current_return/TARGET_PROFIT)
         else:
             # 亏损惩罚立方增长
-            reward += 3 * STOP_LOSS_PENALTY_BASE * (abs(current_return)/STOP_LOSS)**3         
+            reward += STOP_LOSS_PENALTY_BASE * (1 - current_return/TARGET_PROFIT)**1.2         
         truncated = True
     else:         
         # ----------------------------
@@ -108,14 +108,14 @@ def calculate_reward(
         if momentum > 0:
             new_ups += 1
             new_downs = 0
-        else: # 不增长视为下跌
+        elif momentum < 0: # 不增长视为下跌
             new_downs += 1
             new_ups = 0
 
         if new_ups > 0:
-            reward +=  (1 - progress_ratio) ** new_ups
+            reward += abs(momentum) * PROFIT_STEP_COEFF + (1 - progress_ratio) ** new_ups
         if new_downs > 0:
-            reward -=  (1 - progress_ratio) ** new_downs 
+            reward -= abs(momentum) * LOSS_STEP_COEFF + (1 - progress_ratio) ** new_downs 
 
     return round(reward, 6), done, truncated, new_ups, new_downs
 

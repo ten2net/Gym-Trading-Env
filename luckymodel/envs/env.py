@@ -15,109 +15,109 @@ import argparse
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
 def calculate_reward(
+    history,
+    current_price: float,
     current_value: float,
-    prev_value: float,
-    step: int,
+    step: int = 0,
     max_steps: int = 480,
     target_profit: float = 0.15,
-    stop_loss: float = -0.1,
+    stop_loss: float = 0.1,
     consecutive_ups: int = 0,
     consecutive_downs: int = 0
-) -> tuple[float, bool, bool]:
+) -> tuple[float, bool, bool, int, int]:
     """
     强化学习交易策略的奖励计算函数
-    该奖励函数用于5分钟的OHLCV数据训练PPO模型，我发现训练到1m步后，平均奖励似乎不再震荡爬升，且震荡剧烈，如何抑制震荡，且回合平均步数在440到470区间震荡，最大步数是480。如何在不对奖励结构做大调整的情况下，抑制震荡，让平均奖励趋势上升直到收敛，让回合平均步数趋势下降也收敛到较低水平    
+    修改后的版本更注重趋势延续和稳定性
     
     参数：
-    - current_value: 当前资产净值（标准化后的值，初始为1.0）
-    - prev_value: 前一步的资产净值
-    - step: 当前步数（0-based）
+    - history: 历史数据
+    - current_price: 当前价格
+    - current_value: 当前资产市值
+    - step: 当前步数
     - max_steps: 最大允许步数
+    - target_profit: 目标收益率
+    - stop_loss: 止损线
+    - consecutive_ups: 连续上涨次数
+    - consecutive_downs: 连续下跌次数
     
     返回：
     - reward: 当前步的奖励值
     - done: 是否终止当前回合
+    - truncated: 是否因步数限制终止
+    - new_ups: 更新后的连续上涨次数
+    - new_downs: 更新后的连续下跌次数
     """
-    # ========== 参数配置 ==========
-    TARGET_PROFIT = target_profit   # 目标收益率15%
-    STOP_LOSS = stop_loss      # 最大亏损10%
+    TARGET_PROFIT = np.log(1 + target_profit)
+    STOP_LOSS = np.log(1 - stop_loss)
     
-    # 计算当前收益状态
-    current_return = current_value - 1.0   # 标准化收益率
-    prev_return = prev_value - 1.0  if prev_value is not None else 0.0
-    momentum = current_return - prev_return
-    # 更新连续上涨/下跌次数
+    prev_price = float(history["price", -1])
+    prev_value = float(history["portfolio_valuation", -1])
+    
+    current_return_base = np.log(current_price / prev_price)
+    current_return = np.log(current_value / prev_value)
+    
     new_ups, new_downs = consecutive_ups, consecutive_downs    
     
-    # 奖励系数配置    
-    PROFIT_STEP_COEFF = 1.0
-    LOSS_STEP_COEFF = 0.8 * PROFIT_STEP_COEFF    
-    TARGET_BONUS_BASE = 100 * PROFIT_STEP_COEFF
-    STOP_LOSS_PENALTY_BASE = -80 * LOSS_STEP_COEFF
-
-    done, truncated = False, False
-    reward = 0.0
-    rewards = []
+    # 重新平衡的奖励系数
+    BASE_PROFIT_COEFF = 1.0
+    BASE_LOSS_COEFF = 1.5  # 惩罚略大于奖励
+    EARLY_BONUS = 50       # 提前完成的额外奖励
     
-    # 动态进度感知衰减
     progress_ratio = step / max_steps
-    DYNAMIC_COEFF = 1.8 / (1 + np.exp(6*(progress_ratio - 0.7)))  # 关键点0.7步时开始衰减
-    # # ----------------------------
-    # # 基础奖励
-    # # ----------------------------
-    # if current_return >= 0:
-    #     # 计算收益进度变化
-    #     curr_progress = current_return / TARGET_PROFIT
-    #     prev_progress = prev_return / TARGET_PROFIT if prev_value is not None else 0.0
-    #     # 引入加速奖励：后期进度变化奖励加倍
-    #     reward += abs(curr_progress - prev_progress) *  PROFIT_STEP_COEFF * DYNAMIC_COEFF
-    # else:
-    #     # 计算亏损进度变化（相对止损）
-    #     curr_loss = current_return/STOP_LOSS 
-    #     prev_loss =prev_return/STOP_LOSS if prev_value is not None else 0.0
-    #     # 添加损失变化的平滑处理
-    #     loss_change = abs(curr_loss - prev_loss)
-    #     reward -= loss_change * LOSS_STEP_COEFF
+    TIME_PENALTY = -0.05 # * (1 + 2*progress_ratio**2)  # 每步的时间成本
+    
+    done, truncated = False, False
+    reward = TIME_PENALTY  # 基础时间惩罚
+    
     
     # 情况1：达到目标收益
-    if current_return >= TARGET_PROFIT :
-        # 增加时间奖励递减因子 
-        time_bonus = TARGET_BONUS_BASE + TARGET_BONUS_BASE * (2 - progress_ratio) ** 3
-        reward += time_bonus
+    if current_return >= TARGET_PROFIT:
+        # 提前完成奖励 = 基础奖励 + 提前完成奖励(指数衰减)
+        early_bonus = EARLY_BONUS * np.exp(-5 * progress_ratio)
+        reward += BASE_PROFIT_COEFF * (TARGET_PROFIT + early_bonus)
         done = True
+    
     # 情况2：触发止损
-    elif current_return <= STOP_LOSS :
-        # 动态止损惩罚：后期惩罚加倍
-        reward += STOP_LOSS_PENALTY_BASE + STOP_LOSS_PENALTY_BASE * (1 + progress_ratio) ** 2
+    elif current_return <= STOP_LOSS:
+        # 止损惩罚 = 基础惩罚 × 亏损严重程度
+        loss_severity = min(abs(current_return/STOP_LOSS), 2.0)
+        reward += BASE_LOSS_COEFF * STOP_LOSS * loss_severity
         done = True
+    
     # 情况3：达到最大步数
-    elif step >= max_steps :  # 考虑0-based索引
-        # 终点惩罚梯度重构
-        if current_return > 0:
-            # 进度奖励指数增长 
-            reward += TARGET_BONUS_BASE * (1 + current_return/TARGET_PROFIT)
-        else:
-            # 亏损惩罚立方增长
-            reward += STOP_LOSS_PENALTY_BASE * (1 - current_return/TARGET_PROFIT)**1.2         
+    elif step >= max_steps:
+        # 终点补偿 = 当前收益 × 进度补偿系数
+        reward += current_return * (EARLY_BONUS *  (current_return / TARGET_PROFIT) if current_return > 0 else EARLY_BONUS * 2 * np.sqrt(abs(current_return / STOP_LOSS)))
         truncated = True
-    else:         
-        # ----------------------------
-        # 趋势奖励（抑制震荡）趋势延续奖励可使后期训练更稳定 # 在上升趋势中​​保持持仓​​   # 在下跌趋势中​​加速止损​​    # 在震荡行情中​​减少无效交易
-        # ----------------------------
-
-        if momentum > 0:
+    
+    else:
+        # ===== 动态趋势奖励 =====
+        momentum = current_return - current_return_base
+        TREND_THRESHOLD = 0.001 * (1 - 0.5*progress_ratio)
+        # 更新趋势连续性 (增加最小变化阈值)
+        if momentum > TREND_THRESHOLD:  # 0.1%以上变化才视为趋势
             new_ups += 1
             new_downs = 0
-        elif momentum < 0: # 不增长视为下跌
+        elif momentum < -TREND_THRESHOLD:
             new_downs += 1
             new_ups = 0
+        
+        # 趋势奖励机制改进
+        if new_ups >= 1:  
+            trend_strength = min(new_ups/5, 1.0)  # 标准化强度
+            reward += BASE_PROFIT_COEFF * (
+                current_return  # 价格变动基础奖励
+                + trend_strength   # 趋势延续奖励
+            )
+        
+        if new_downs >= 1:  # 只要下跌就惩罚
+            trend_weakness = min(new_downs/3, 1.0)
+            reward += BASE_LOSS_COEFF * (
+                current_return  # 价格变动基础惩罚
+                - trend_weakness * 0.8  # 趋势延续惩罚
+            )
 
-        if new_ups > 0:
-            reward += abs(momentum) * PROFIT_STEP_COEFF + (1 - progress_ratio) ** new_ups
-        if new_downs > 0:
-            reward -= abs(momentum) * LOSS_STEP_COEFF + (1 - progress_ratio) ** new_downs 
-
-    return round(reward, 6), done, truncated, new_ups, new_downs
+    return reward, done, truncated, new_ups, new_downs
 
 
 def dynamic_feature_last_position_taken(history):
@@ -137,7 +137,7 @@ def make_env(
     portfolio_initial_value: float = 1000000.0,  # in FIAT (here, YMB)
     max_episode_duration: int | Literal["max"] = 48 * 22,  # "max" ,# 500,
     target_return: float = 0.15,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-    stop_loss: float = -0.10,  # 止损，低于视为失败，给予惩罚
+    stop_loss: float = 0.10,  # 止损，低于视为失败，给予惩罚
     render_mode: Literal["logs", "human"] = "logs",
     verbose: Literal[0, 1, 2] = 1
 ):

@@ -42,8 +42,8 @@ class TradingEnv(gym.Env):
         portfolio_initial_value: float = 1e6,
         initial_position: str = 'random',
         max_episode_duration: Any = 'max',
-        target_return: float = 0.3,
-        stop_loss=-0.10,
+        target_return: float = 0.15,
+        stop_loss=0.10,
         name: str = "Stock",
         render_mode: Optional[str] = None,
         verbose: int = 1
@@ -263,16 +263,17 @@ class TradingEnv(gym.Env):
             trading_fees=self.trading_fees
         )
 
-    def _calculate_reward(self):        
-        current_value: float =  float(self.portfolio.valorisation(self._get_price()) / self.portfolio_initial_value)
-        prev_value: float = float(self.history["portfolio_valuation", -1] / self.portfolio_initial_value)
+    def _calculate_reward(self):
+        current_price =  self._get_price()      
+        current_value: float =  float(self.portfolio.valorisation(current_price))
         step: int = self._step
         max_steps: int = self.max_episode_duration if isinstance(self.max_episode_duration, int) else len(self.df)        
         
         reward, self._terminated, self._truncated, self.consecutive_ups, self.consecutive_downs = self.reward_function(
+            history=self.history,
+            current_price = current_price,
             current_value = current_value, 
-            prev_value = prev_value,
-            step = step,
+            step = step, 
             max_steps = max_steps,
             target_profit=self.target_return,
             stop_loss=self.stop_loss,

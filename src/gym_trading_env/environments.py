@@ -87,6 +87,7 @@ class TradingEnv(gym.Env):
         self.render_mode = params['render_mode']
         self.target_return = params['target_return']
         self.stop_loss = params['stop_loss']
+        self.training_steps = 0
 
         self.log_metrics = []
 
@@ -235,6 +236,7 @@ class TradingEnv(gym.Env):
         # 更新索引
         self._idx += 1
         self._step += 1
+        self.training_steps += 1
 
         # 在更新历史记录前检查终止状态
         # self._check_termination()
@@ -278,7 +280,8 @@ class TradingEnv(gym.Env):
             target_profit=self.target_return,
             stop_loss=self.stop_loss,
             consecutive_ups=self.consecutive_ups,
-            consecutive_downs=self.consecutive_downs
+            consecutive_downs=self.consecutive_downs,
+            training_steps=self.training_steps
             )
         return reward
 

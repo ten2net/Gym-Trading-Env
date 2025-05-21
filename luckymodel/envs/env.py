@@ -23,7 +23,8 @@ def calculate_reward(
     target_profit: float = 0.15,
     stop_loss: float = 0.1,
     consecutive_ups: int = 0,
-    consecutive_downs: int = 0
+    consecutive_downs: int = 0,
+    training_steps: int = 0
 ) -> tuple[float, bool, bool, int, int]:
     """
     强化学习交易策略的奖励计算函数
@@ -39,6 +40,7 @@ def calculate_reward(
     - stop_loss: 止损线
     - consecutive_ups: 连续上涨次数
     - consecutive_downs: 连续下跌次数
+    - training_steps : 训练步数，用于调整时间惩罚
     
     返回：
     - reward: 当前步的奖励值
@@ -64,7 +66,10 @@ def calculate_reward(
     EARLY_BONUS = 50       # 提前完成的额外奖励
     
     progress_ratio = step / max_steps
-    TIME_PENALTY = -0.05 # * (1 + 2*progress_ratio**2)  # 每步的时间成本
+    # 系数从-0.05→-0.04,降低基础惩罚，避免初期探索不足 
+    # 指数从2→1.8 ,减缓后期惩罚增长速率，防止模型过早止损。
+    # 乘数从2→1.2​​：缩小动态范围，平衡探索与利用。
+    TIME_PENALTY =-0.04 * (1 + 1.2 * progress_ratio**1.8) if training_steps > 1e6 else -0.04
     
     done, truncated = False, False
     reward = TIME_PENALTY  # 基础时间惩罚
@@ -73,6 +78,36 @@ def calculate_reward(
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT:
         # 提前完成奖励 = 基础奖励 + 提前完成奖励(指数衰减)
+        # TARGET_PROFIT=np.log(1 + target_profit) 是预设目标收益率（如15%对应≈0.1398），代表策略的基本任务要求。
+        # EARLY_BONUS * np.exp(-5 * progress_ratio) 是动态附加奖励，鼓励模型尽快达成目标。
+        # 基础奖励（TARGET_PROFIT）​​
+        #     ​​确保策略有效性​​：保证模型至少获得与目标收益率匹配的基础奖励，建立收益与风险的基准对应关系。
+        #     ​​数学必要性​​：对数收益率 TARGET_PROFIT 本身已包含复利特性，直接作为奖励基准符合金融逻辑。
+        # 提前奖励（early_bonus）​​
+        #     通过 np.exp(-5 * progress_ratio) 实现指数衰减，体现"越早达成奖励越高"的原则：
+        #     当 progress_ratio=0（第一步达成）：奖励最大（early_bonus = EARLY_BONUS）
+        #     当 progress_ratio→1：奖励趋近于0（early_bonus ≈ EARLY_BONUS*0.0067） 
+        # 机会成本补偿​​
+        #     在金融中，早期实现的收益具有更高时间价值。例如：
+        #     第1步赚15% vs 第480步赚15%，前者可立即复投获取额外收益。
+        #     early_bonus 实质是对这种机会成本的量化补偿。
+        # 衰减系数（当前为5）​​
+        #     若需更陡峭的时间衰减（强化"尽早达成"）：
+        #     np.exp(-7 * progress_ratio)  # 中期奖励衰减更快
+        #     np.exp(-3 * progress_ratio)  # 中期保留更多奖励
+        # EARLY_BONUS 与 TARGET_PROFIT 的比例​​
+        #     当前 50/0.1398≈358x 的倍数关系较为激进，适合高波动市场。
+        #     对于稳定市场可调整为： EARLY_BONUS = 20  # 降为≈143x    
+        # 改进公式（平滑极端值）​​
+        #     early_bonus = EARLY_BONUS * np.exp(-5 * (progress_ratio**0.8))
+        #     这种次线性变换（progress_ratio**0.8）可使中期奖励衰减更平缓，同时保持后期快速收敛。
+        # 数学本质
+        #     该设计实质是 ​​时间折扣奖励​​ 的变体：
+        #     总奖励 = 即时收益奖励 + 时间效率奖励
+        # 其中：
+        #     TARGET_PROFIT 对应贝尔曼方程中的 R(s,a)
+        #     early_bonus 对应折扣因子 γ^t 的逆应用（越早达成，γ^t越小，但奖励越大）
+        # 这种结构在期权定价早期执行溢价中有类似应用，符合金融数学原理。                          
         early_bonus = EARLY_BONUS * np.exp(-5 * progress_ratio)
         reward += BASE_PROFIT_COEFF * (TARGET_PROFIT + early_bonus)
         done = True
@@ -80,16 +115,54 @@ def calculate_reward(
     # 情况2：触发止损
     elif current_return <= STOP_LOSS:
         # 止损惩罚 = 基础惩罚 × 亏损严重程度
-        loss_severity = min(abs(current_return/STOP_LOSS), 2.0)
+        # 当前方法对超跌的惩罚增长更平缓（通过 STOP_LOSS * loss_severity 实现非线性约束）。
+        # 直接使用 current_return 在极端情况下会产生过大的梯度，导致训练不稳定（与您展示的剧烈震荡曲线相关）。
+        # 鼓励模型学会遵守止损纪律，而非预测市场极端波动（后者几乎不可能稳定实现）。
+        # 通过 loss_severity 的梯度惩罚（1.0→2.0），模型会更早主动止损，从而缩短平均回合长度（从475→460区间）。        
+        # 惩罚 = 系数 × 基准 × (实际损失/基准)^k
+        # 其中 k=1 时为线性惩罚，k>1 时为超线性惩罚（对超跌更敏感）。这种结构在强化学习中被称为 ​​Huberized Penalty​​，
+        # 这样处理后，平衡了对异常值的鲁棒性和梯度有效性。
+        # loss_severity = min(abs(current_return/STOP_LOSS), 2.0)
+        loss_severity = min(abs(current_return/STOP_LOSS)**1.5, 3.0)  # 非线性增长
         reward += BASE_LOSS_COEFF * STOP_LOSS * loss_severity
         done = True
     
     # 情况3：达到最大步数
     elif step >= max_steps:
-        # 终点补偿 = 当前收益 × 进度补偿系数
-        reward += current_return * (EARLY_BONUS *  (current_return / TARGET_PROFIT) if current_return > 0 else EARLY_BONUS * 2 * np.sqrt(abs(current_return / STOP_LOSS)))
-        truncated = True
-    
+        # 终点补偿 = 当前收益 × 目标达成度补偿系数
+        # 盈利情况的线性处理​​
+        #     (current_return / TARGET_PROFIT) 实现：
+        #     收益达标时（current_return ≈ TARGET_PROFIT）：奖励 ≈ EARLY_BONUS
+        #     超额收益时（如 current_return = 2*TARGET_PROFIT）：奖励线性增长到 2*EARLY_BONUS
+        # ​​亏损情况的非线性处理（关键创新）​​
+        #     总惩罚 = 基础系数 × 压缩后亏损程度
+        #     np.sqrt(abs(current_return / STOP_LOSS)) 专门解决：
+        # ​    ​梯度爆炸抑制​​：您原始曲线中出现的-40极端值，通过平方根压缩大幅降低异常惩罚。
+        # 金融合理性​​
+        #     符合 ​​"边际风险递增"​​ 原则：
+        #         小亏损（如-5%）需要敏感反应
+        #         大亏损（如-20%）应避免过度反应（因可能含市场异常波动）
+        # 终点补偿逻辑​中，若轻微盈利或轻微亏损，不奖励或惩罚
+        # 引入​​死区机制​​，在保持对显著盈亏合理反应的同时，过滤了微小波动带来的噪声信号，
+        # 更符合实际交易中"忽略小额摩擦成本"的原则。建议初始设置 DEAD_ZONE_RATIO=0.01，后续根据训练曲线调整。
+        # 定义死区阈值（例如±1%收益率）
+        DEAD_ZONE_RATIO = 0.01  
+        dead_zone_lower = np.log(1 - DEAD_ZONE_RATIO)  # ≈-0.01005
+        dead_zone_upper = np.log(1 + DEAD_ZONE_RATIO)  # ≈0.00995 
+                
+        if current_return > dead_zone_upper:
+            # 显著盈利：线性奖励
+            reward += EARLY_BONUS * (current_return / TARGET_PROFIT)
+        elif current_return < dead_zone_lower:
+            # 显著亏损：平方根压缩惩罚
+            # 亏损超出死区部分才惩罚
+            excess_loss = abs(current_return) - abs(dead_zone_lower)            
+            loss_ratio = min(abs(current_return / STOP_LOSS), 4.0)
+            reward -= excess_loss  * 2 * np.sqrt(loss_ratio)
+        else:
+            # 轻微波动：零奖惩（仅保留基础时间惩罚）
+            pass                         
+        truncated = True    
     else:
         # ===== 动态趋势奖励 =====
         momentum = current_return - current_return_base
@@ -104,18 +177,28 @@ def calculate_reward(
         
         # 趋势奖励机制改进
         if new_ups >= 1:  
-            trend_strength = min(new_ups/5, 1.0)  # 标准化强度
+            # tanh 的输出范围始终在 (-1, 1)，天然避免奖励爆炸。
+            # 双曲正切控制增长速率（越小增长越快，3是一个平衡值）
+            # tanh 在早期（new_ups=1→3）提供更积极的激励，有助于缩短回合长度（对应您下图中的高步数问题）。
+            # 在后期（new_ups>5）自动抑制过拟合，稳定训练曲线。
+            trend_strength = np.tanh(new_ups/3)  # 改用双曲正切平滑增长
+            log_return = np.log1p(abs(current_return))  # 保证输入>0
             reward += BASE_PROFIT_COEFF * (
-                current_return  # 价格变动基础奖励
+                log_return  # 价格变动基础奖励
                 + trend_strength   # 趋势延续奖励
             )
         
         if new_downs >= 1:  # 只要下跌就惩罚
-            trend_weakness = min(new_downs/3, 1.0)
-            reward += BASE_LOSS_COEFF * (
-                current_return  # 价格变动基础惩罚
-                - trend_weakness * 0.8  # 趋势延续惩罚
-            )
+            # 对数收益率log(1+x)在x接近0时≈x，在x较大时增长变缓，能自动抑制极端惩罚
+            # 训练曲线剧烈波动正是需要这种非线性抑制
+            # ​​风险控制​​：防止单次大亏损导致奖励值"悬崖式"下降
+            log_return = np.log1p(abs(min(current_return, -0.001)))  # 保证输入>0
+            reward -= BASE_LOSS_COEFF * (log_return + np.log1p(new_downs)/2)  # 双重对数平滑
+            # trend_weakness = min(new_downs/3, 1.0)
+            # reward += BASE_LOSS_COEFF * (
+            #     current_return  # 价格变动基础惩罚
+            #     - trend_weakness * 0.8  # 趋势延续惩罚
+            # )
 
     return reward, done, truncated, new_ups, new_downs
 

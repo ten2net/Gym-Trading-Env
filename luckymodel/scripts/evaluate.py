@@ -14,6 +14,12 @@ import matplotlib.pyplot as plt
 from sb3_contrib import RecurrentPPO
 from stable_baselines3 import PPO
 from envs.env import make_env
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from gymnasium.wrappers import RecordEpisodeStatistics
+import warnings
+warnings.filterwarnings("ignore", category=ResourceWarning)
+# warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
+
 
 class TradingMetricsCalculator:
     """金融指标计算工具类"""
@@ -58,17 +64,24 @@ def evaluate_model(env, model, num_episodes=1000):
 
     for _ in range(num_episodes):
         # 获取初始投资组合净值
-        obs, info = env.reset()
+        # obs, info = env.reset()
+        obs = env.reset()
+        # print(obs)
         episode_returns = [1000000]
         done = False
         truncated = False
 
         while not done and not truncated:
             action, _ = model.predict(obs, deterministic=False)
-            obs, _, done, truncated, info = env.step(action)
-            episode_returns.append(info['portfolio_valuation'])
+            # obs, _, done, truncated, info = env.step(action)
+            obs, _, done,  info = env.step(action)
+            # print(info)
+            done=done[0]
+            episode_returns.append(info[0]['portfolio_valuation'])
+            truncated =info[0]['truncated']
+            # print(done, truncated)
             # if truncated or done:
-            #   obs, info = env.reset() 
+            #   obs = env.reset() 
 
         # 计算各项指标
         metrics.append({
@@ -108,14 +121,36 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # 创建评估环境
-    env = make_env(args.symbol, window_size=None, eval=False)
+    # env = make_env(args.symbol, window_size=None, eval=False)
+    common_env_params = {
+        'window_size': 3,
+        'eval': False,
+        'positions': [0, 0.5, 1],
+        'trading_fees': 0.01/100,
+        'portfolio_initial_value': 1000000.0,
+        'max_episode_duration': 48 * 10,
+        'target_return': 0.1,
+        'stop_loss': 0.1,
+        'render_mode': "logs",
+        'verbose': 0
+    }
+    # 创建训练环境（可添加训练特有的参数）
+    env = make_env(
+        symbol=args.symbol,
+        **common_env_params
+    )  
+    
+    # 创建环境并包装为 VecNormalize
+    base_env = RecordEpisodeStatistics(env)  # 关键步骤！
+    env = DummyVecEnv([lambda: base_env])
+    env = VecNormalize(env, norm_obs=True, norm_reward=False)      
 
     # 加载训练好的模型
     # model = RecurrentPPO.load("./rppo_trading_model_20250503_1401.zip")
-    model = PPO.load("./rppo_trading_model_20250504_2153.zip")
+    model = PPO.load("./rppo_trading_model_20250521_2314.zip",device='cpu')
 
     # 执行评估
-    results = evaluate_model(env, model, num_episodes=500)
+    results = evaluate_model(env, model, num_episodes=5)
 
     # 输出评估报告
     print("\n=== 评估结果 ===")

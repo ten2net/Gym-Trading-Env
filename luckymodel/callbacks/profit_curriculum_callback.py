@@ -31,12 +31,14 @@ class ProfitCurriculumCallback(BaseCallback):
         for env_idx in range(self.training_env.num_envs):
             env = self.training_env.envs[env_idx].unwrapped
             
+            if total_steps < 0.5e6:
+                new_target = 0.3
             if total_steps < 1e6:
-                new_target = 0.12
-            elif total_steps < 3e6:
-                new_target = 0.15
+                new_target = 0.05
+            elif total_steps < 1.5e6:
+                new_target = 0.075
             else:
-                new_target = 0.18
+                new_target = 0.12
                 
             # 设置新目标并记录日志
             if env.target_return != new_target:

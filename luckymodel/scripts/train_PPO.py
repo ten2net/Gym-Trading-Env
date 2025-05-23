@@ -12,7 +12,7 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.utils import get_schedule_fn
 import warnings
 from envs.env import make_env
-from callbacks.profit_curriculum_callback import ProfitCurriculumCallback,EpisodeMetricsCallback
+from callbacks.profit_curriculum_callback import ProfitCurriculumCallback,EpisodeMetricsCallback,EntropyScheduler
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RecordEpisodeStatistics
@@ -129,6 +129,13 @@ def train(symbol_train: str,
         final_lr=max_lr,
         warmup_ratio=warmup_ratio
     )   
+    
+    # 动态调整约束强度
+    def linear_schedule(initial_value, final_value):
+        """返回一个调度函数"""
+        def func(progress_remaining):
+            return final_value + (initial_value - final_value) * progress_remaining
+        return func   
 
     device = "cpu" #'cuda' if torch.cuda.is_available() else 'cpu'
     print("torch.cuda.is_available()=", torch.cuda.is_available())
@@ -142,9 +149,9 @@ def train(symbol_train: str,
         n_steps=1024,
         batch_size=512,  # 需满足batch_size <= n_steps
         n_epochs=10,
-        clip_range=0.15,
+        clip_range=linear_schedule(0.2, 0.1),  # 逐渐收紧PPO clip范围
+        ent_coef=0.05, 
         gamma=0.95,  # 延长收益视野
-        ent_coef=0.12,  # 初始高探索
         # gae_lambda=0.98,
         # policy_kwargs={'net_arch': net_arch},
         verbose=0,
@@ -170,6 +177,7 @@ def train(symbol_train: str,
     # progressBarCallback = ProgressBarCallback()
     
     # 创建回调实例
+    entropy_scheduler_callback = EntropyScheduler(initial_value=0.08, final_value=0.001)
     curriculum_callback = ProfitCurriculumCallback()
       
     model.learn(
@@ -177,7 +185,8 @@ def train(symbol_train: str,
         progress_bar=True,
         log_interval=10,
         tb_log_name=f"ppo_new_reward",
-        callback=[curriculum_callback,
+        callback=[entropy_scheduler_callback,
+                  curriculum_callback,
                   EpisodeMetricsCallback()],
         # callback=[curriculum_callback],
         # callback=[eval_callback,

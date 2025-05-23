@@ -111,7 +111,7 @@ def calculate_reward(
         # early_bonus = EARLY_BONUS * np.exp(-5 * progress_ratio)
         # 分级奖励机制
         return_ratio = current_return / TARGET_PROFIT
-        if return_ratio < 1.05:  # 基础达标区
+        if return_ratio < 1.005:  # 基础达标区
             early_bonus = EARLY_BONUS * np.exp(-5 * (progress_ratio**0.7))
         else:  # 超额达标区
             early_bonus = EARLY_BONUS * 1.5 * np.exp(-3 * (progress_ratio**0.5))        

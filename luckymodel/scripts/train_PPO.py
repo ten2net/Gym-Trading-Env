@@ -177,7 +177,8 @@ def train(symbol_train: str,
         progress_bar=True,
         log_interval=10,
         tb_log_name=f"ppo_new_reward",
-        callback=[EpisodeMetricsCallback()],
+        callback=[curriculum_callback,
+                  EpisodeMetricsCallback()],
         # callback=[curriculum_callback],
         # callback=[eval_callback,
         #           progressBarCallback],
@@ -197,7 +198,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--window_size', type=int, default=6)
     parser.add_argument('--target_return', type=float, default=0.05)
-    parser.add_argument('--stop_loss', type=float, default=0.5)
+    parser.add_argument('--stop_loss', type=float, default=0.15)
     parser.add_argument('--total_timesteps', type=int, default=2e6)
 
     args = parser.parse_args()

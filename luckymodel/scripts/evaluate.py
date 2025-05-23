@@ -16,6 +16,7 @@ from stable_baselines3 import PPO
 from envs.env import make_env
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RecordEpisodeStatistics
+from stable_baselines3.common.evaluation import evaluate_policy
 import warnings
 warnings.filterwarnings("ignore", category=ResourceWarning)
 # warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
@@ -123,13 +124,13 @@ if __name__ == "__main__":
     # 创建评估环境
     # env = make_env(args.symbol, window_size=None, eval=False)
     common_env_params = {
-        'window_size': 3,
+        'window_size': None,
         'eval': False,
         'positions': [0, 0.5, 1],
         'trading_fees': 0.01/100,
         'portfolio_initial_value': 1000000.0,
         'max_episode_duration': 48 * 10,
-        'target_return': 0.1,
+        'target_return': 0.05,
         'stop_loss': 0.1,
         'render_mode': "logs",
         'verbose': 0
@@ -147,8 +148,21 @@ if __name__ == "__main__":
 
     # 加载训练好的模型
     # model = RecurrentPPO.load("./rppo_trading_model_20250503_1401.zip")
-    model = PPO.load("./rppo_trading_model_20250521_2314.zip",device='cpu')
-
+    model = PPO.load("./rppo_trading_model_20250523_1334.zip",device='cpu')
+    print(model.policy)
+    
+    def evaluate_by_initial_conditions(model, env, n_conditions=5):
+        for seed in range(n_conditions):
+            env.seed(seed)
+            mean_reward, std_reward= evaluate_policy(model, env, n_eval_episodes=5, deterministic=True)
+            print(f"Seed {seed}: {mean_reward:.2f} +/- {std_reward:.2f}")    
+    evaluate_by_initial_conditions(model, env, n_conditions=5)
+    # mean_reward, std_reward = evaluate_policy(
+    #     model, 
+    #     base_env, 
+    #     n_eval_episodes=500,
+    #     deterministic=True)
+    # print(f"Mean reward: {mean_reward} +/- {std_reward}")    
     # 执行评估
     results = evaluate_model(env, model, num_episodes=5)
 

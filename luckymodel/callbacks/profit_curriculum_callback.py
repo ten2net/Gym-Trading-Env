@@ -44,3 +44,20 @@ class ProfitCurriculumCallback(BaseCallback):
             if env.target_return != new_target:
                 env.target_return = new_target
                 self.logger.record(f"env_{env_idx}/target_return", new_target)
+                
+class EntropyScheduler(BaseCallback):
+    def __init__(self, initial_value, final_value, verbose=0):
+        super().__init__(verbose)
+        self.initial_value = initial_value
+        self.final_value = final_value
+        
+    def _on_step(self) -> bool:
+        # 计算当前进度
+        progress = 1.0 - (self.num_timesteps / self.model._total_timesteps)
+        
+        # 线性衰减
+        self.model.ent_coef = self.final_value + (self.initial_value - self.final_value) * progress
+        
+        # 记录当前ent_coef值
+        self.logger.record("train/ent_coef", self.model.ent_coef)
+        return True                

@@ -108,8 +108,14 @@ def calculate_reward(
         #     TARGET_PROFIT 对应贝尔曼方程中的 R(s,a)
         #     early_bonus 对应折扣因子 γ^t 的逆应用（越早达成，γ^t越小，但奖励越大）
         # 这种结构在期权定价早期执行溢价中有类似应用，符合金融数学原理。                          
-        early_bonus = EARLY_BONUS * np.exp(-5 * progress_ratio)
-        reward += BASE_PROFIT_COEFF * (TARGET_PROFIT + early_bonus)
+        # early_bonus = EARLY_BONUS * np.exp(-5 * progress_ratio)
+        # 分级奖励机制
+        return_ratio = current_return / TARGET_PROFIT
+        if return_ratio < 1.05:  # 基础达标区
+            early_bonus = EARLY_BONUS * np.exp(-5 * (progress_ratio**0.7))
+        else:  # 超额达标区
+            early_bonus = EARLY_BONUS * 1.5 * np.exp(-3 * (progress_ratio**0.5))        
+        reward += BASE_PROFIT_COEFF * (TARGET_PROFIT + early_bonus + np.log1p(return_ratio - 1))
         done = True
     
     # 情况2：触发止损

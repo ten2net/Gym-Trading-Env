@@ -157,20 +157,23 @@ if __name__ == "__main__":
             mean_reward, std_reward= evaluate_policy(model, env, n_eval_episodes=5, deterministic=True)
             print(f"Seed {seed}: {mean_reward:.2f} +/- {std_reward:.2f}")    
     evaluate_by_initial_conditions(model, env, n_conditions=5)
-    # mean_reward, std_reward = evaluate_policy(
-    #     model, 
-    #     base_env, 
-    #     n_eval_episodes=500,
-    #     deterministic=True)
-    # print(f"Mean reward: {mean_reward} +/- {std_reward}")    
-    # 执行评估
-    results = evaluate_model(env, model, num_episodes=5)
+    mean_reward, std_reward = evaluate_policy(
+        model, 
+        env, 
+        n_eval_episodes=10,
+        deterministic=True)
+    print(f"Mean reward: {mean_reward} +/- {std_reward}")
+    
+    for seed in range(5):    
+        # 执行评估
+        env.seed(seed)
+        results = evaluate_model(env, model, num_episodes=5)
 
-    # 输出评估报告
-    print("\n=== 评估结果 ===")
-    print(f"平均夏普比率: {results['mean_sharpe']:.2f}")
-    print(f"最大回撤: {results['max_drawdown']:.2%}")
-    print(f"平均总收益: {results['avg_return']:.2%}")
+        # 输出评估报告
+        print(f"\n=== 评估结果 (种子: {seed}) ===")
+        print(f"平均夏普比率: {results['mean_sharpe']:.2f}")
+        print(f"最大回撤: {results['max_drawdown']:.2%}")
+        print(f"平均总收益: {results['avg_return']:.2%}")
 
     # 可视化净值曲线
-    plot_portfolio_results(results['cumulative_returns'])
+    # plot_portfolio_results(results['cumulative_returns'])

@@ -1,4 +1,6 @@
 import sys
+
+from stable_baselines3 import PPO
 sys.path.append("../")
 import datetime
 import argparse
@@ -10,74 +12,156 @@ from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.utils import get_schedule_fn
 import warnings
 from envs.env import make_env
+from callbacks.profit_curriculum_callback import ProfitCurriculumCallback,EpisodeMetricsCallback,EntropyScheduler
 import torch
-
-sys.path.append("../")
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from gymnasium.wrappers import RecordEpisodeStatistics
 
 warnings.filterwarnings("ignore", category=ResourceWarning)
 warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
 
-
+class RobustCosineSchedule:
+    def __init__(self, initial_lr=1e-6, final_lr=1e-3, warmup_ratio=0.2):
+        """
+        工业级稳健的学习率调度器
+        特点：
+        1. 双重数值钳制
+        2. 浮点误差补偿
+        3. 自动范围校正
+        """
+        self.initial_lr = float(initial_lr)
+        self.final_lr = float(final_lr)
+        self.warmup_ratio = float(warmup_ratio)
+        
+        # 自动校准参数
+        self._validate_parameters()
+        
+    def _validate_parameters(self):
+        """参数合法性检查"""
+        assert self.initial_lr > 0, "初始学习率必须是正数"
+        assert self.final_lr >= self.initial_lr, "峰值学习率不能小于初始值"
+        assert 0 < self.warmup_ratio < 1, "预热比例必须在(0,1)区间"
+        
+        # 防止浮点误差导致的计算问题
+        self.epsilon = np.finfo(float).eps * 100
+        
+    def __call__(self, progress):
+        """
+        progress: 从1.0（开始）到0.0（结束）的进度
+        返回：计算后的学习率
+        """
+        # 强制进度值合法化
+        progress = np.clip(float(progress), 0.0, 1.0)
+        
+        # 阶段1：线性预热
+        if progress > (1 - self.warmup_ratio):
+            warmup_progress = (1 - progress) / self.warmup_ratio  # 更直观的计算
+            return self._safe_lerp(0.0, self.final_lr, warmup_progress)
+        
+        # 阶段2：改进型余弦退火
+        decay_progress = progress / (1 - self.warmup_ratio)
+        cosine_value = np.cos(np.pi * decay_progress)
+        
+        # 使用线性插值替代原始公式
+        return self._safe_lerp(self.final_lr, self.initial_lr, 0.5*(1 + cosine_value))
+    
+    def _safe_lerp(self, start, end, weight):
+        """带保护的线性插值计算"""
+        weight = np.clip(weight, 0.0, 1.0)
+        # 添加微小偏移防止浮点误差
+        return start + (end - start + self.epsilon) * weight  
+     
 def train(symbol_train: str,
           symbol_eval: str,
-          window_size: int | None = 3,
-          target_return: float = 0.2,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          min_target_return: float = -0.1  # 最小目标收益率，低于视为失败，给予惩罚
+          window_size: int | None = None,
+          target_return: float = 0.1,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+          stop_loss: float = 0.1,  # 最小目标收益率，低于视为失败，给予惩罚
+          total_timesteps: int = 1e7
           ):
     # 定义公共环境参数
     common_env_params = {
         'window_size': window_size,
         'eval': False,
-        'positions': [0, 0.5, 1],
+        'positions': [0, 0.5],
         'trading_fees': 0.01/100,
-        'portfolio_initial_value': 1000000.0,
-        'max_episode_duration': 48 * 22,
+        'portfolio_initial_value': 1000000,
+        'max_episode_duration': 48 * 10,
         'target_return': target_return,
-        'min_target_return': min_target_return,
-        'max_drawdown': -0.8,
-        'daily_loss_limit': -0.8,
+        'stop_loss': stop_loss,
         'render_mode': "logs",
-        'verbose': 1
+        'verbose': 0
     }
     # 创建训练环境（可添加训练特有的参数）
     train_env = make_env(
         symbol=symbol_train,
         **common_env_params
     )
+    
+    # 创建环境并包装为 VecNormalize
+    base_env = RecordEpisodeStatistics(train_env)  # 关键步骤！
+    train_env = DummyVecEnv([lambda: base_env])
+    train_env = VecNormalize(train_env, norm_obs=True, norm_reward=False)
+   
 
     # 创建评估环境（可添加评估特有的参数）
     eval_env = make_env(
         symbol=symbol_eval,
-        **{**common_env_params, 'max_drawdown': -0.8}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
+        **{**common_env_params, 'stop_loss': 0.1}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
     )
-    # 使用PPO算法训练模型
-    initial_lr = 1e-4
-    final_lr = 1e-6
-    # 创建余弦退火学习率调度（从3e-4到1e-6）
-    lr_schedule = get_schedule_fn(
-        lambda progress: final_lr + 0.5 *
-        (initial_lr - final_lr)*(1 + np.cos(np.pi*progress))
-    )
+    
+    eval_env = RecordEpisodeStatistics(eval_env)  # 关键步骤！
+    eval_env = DummyVecEnv([lambda: eval_env])
+    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False)  
+    # eval_env = Monitor(eval_env, './eval_logs')  
+    # 使用PPO算法训练模型   
 
+    min_lr = 2e-5    # 训练结束时
+    max_lr = 2e-4      # 预热结束后的峰值学习率
+    warmup_ratio = 0.05    # 前10%训练时间用于预热
+    # 在训练神经网络时，前20%训练时间用于预热（Warmup）是一个重要的策略。
+    # 其核心好处是稳定初始训练过程，避免模型在初始阶段由于随机权重导致的剧烈波动。
+    # ​​问题​​：网络初始权重是随机初始化的，直接使用大学习率会导致：
+    #     梯度方向不稳定（不同batch的梯度差异大）
+    #     损失函数剧烈震荡
+    # ​​解决​​：从小学习率逐步增大，让模型先"摸索"数据分布    
+    lr_scheduler = RobustCosineSchedule(
+        initial_lr=min_lr,
+        final_lr=max_lr,
+        warmup_ratio=warmup_ratio
+    )   
+    
+    # 动态调整约束强度
+    def linear_schedule(initial_value, final_value):
+        """返回一个调度函数"""
+        def func(progress_remaining):
+            return final_value + (initial_value - final_value) * progress_remaining
+        return func   
+
+    device = "cpu" #'cuda' if torch.cuda.is_available() else 'cpu'
+    print("torch.cuda.is_available()=", torch.cuda.is_available())
+    # net_arch = [ {"pi": [256,256], "vf": [256,256]} ]
     # 创建LSTM策略模型
     policy_kwargs = dict(
-        lstm_hidden_size=256,
+        lstm_hidden_size=128,
         net_arch=dict(
-            pi=[128, 128],  # 显式定义LSTM层
-            vf=[128, 128]),
+            pi=[64, 64],  # 显式定义LSTM层
+            vf=[64, 64]),
         enable_critic_lstm=False,  # 关闭Critic的LSTM
         # optimizer_kwargs=dict(weight_decay=1e-4)
     )
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print("torch.cuda.is_available()=", torch.cuda.is_available())
     model = RecurrentPPO(
         "MlpLstmPolicy",
         train_env,
-        learning_rate=1e-6 , # lr_schedule,  # 直接传入调度器对象  #3e-4, # 调高初始学习率
+        learning_rate= lr_scheduler,  
         policy_kwargs=policy_kwargs,
+        n_steps=1024,
+        batch_size=1024,  # 需满足batch_size <= n_steps
         n_epochs=10,
-        gamma=0.92,  # 延长收益视野
-        ent_coef=0.05,  # 初始高探索
+        clip_range=linear_schedule(0.2, 0.1),  # 逐渐收紧PPO clip范围
+        ent_coef=0.05, 
+        gamma=0.95,  # 延长收益视野
+        # gae_lambda=0.98,
+        # policy_kwargs={'net_arch': net_arch},
         verbose=0,
         device=device,
         seed=42,
@@ -85,26 +169,34 @@ def train(symbol_train: str,
     # 评估回调
     early_stop_callback = StopTrainingOnNoModelImprovement(
         max_no_improvement_evals=100,  # 允许的连续无提升评估次数
-        min_evals=5,                  # 最少评估次数后才开始检查
+        min_evals=50,                  # 最少评估次数后才开始检查
         verbose=1                     # 是否打印日志
     )
     eval_callback = EvalCallback(
         eval_env=eval_env,
-        callback_on_new_best=early_stop_callback,  # 绑定早停回调
+        # callback_on_new_best=early_stop_callback,  # 绑定早停回调
         best_model_save_path="../checkpoints/best_models/",
-        eval_freq=48 * 22,
-        n_eval_episodes=10,
+        eval_freq=48 * 10,
+        n_eval_episodes=10000,
         verbose=0,
         deterministic=True,
         render=False
     )
-    progressBarCallback = ProgressBarCallback()
-
+    # progressBarCallback = ProgressBarCallback()
+    
+    # 创建回调实例
+    entropy_scheduler_callback = EntropyScheduler(initial_value=0.08, final_value=0.001)
+    curriculum_callback = ProfitCurriculumCallback()
+      
     model.learn(
-        total_timesteps=2e6,
-        progress_bar=False,
+        total_timesteps=total_timesteps,  #8_000_000,
+        progress_bar=True,
         log_interval=10,
-        tb_log_name=f"new_reward",
+        tb_log_name=f"rppo_{symbol_train}_12",
+        callback=[entropy_scheduler_callback,
+                #   curriculum_callback,
+                  EpisodeMetricsCallback()],
+        # callback=[curriculum_callback],
         # callback=[eval_callback,
         #           progressBarCallback],
         reset_num_timesteps=True
@@ -121,15 +213,27 @@ if __name__ == "__main__":
     parser.add_argument('--symbol_eval', type=str, default='300308',
                         help='评估使用的股票代码')
 
-    parser.add_argument('--window_size', type=int, default=15)
-    parser.add_argument('--target_return', type=float, default=0.3)
-    parser.add_argument('--min_target_return', type=float, default=0.05)
+    parser.add_argument('--window_size', type=int, default=3)
+    parser.add_argument('--target_return', type=float, default=0.05)
+    parser.add_argument('--stop_loss', type=float, default=0.2)
     parser.add_argument('--total_timesteps', type=int, default=2e6)
 
     args = parser.parse_args()
     symbol_train = args.symbol_train
     symbol_eval = args.symbol_eval
-    model = train(symbol_train, symbol_eval, window_size=3)
+    window_size = args.window_size
+    target_return = args.target_return
+    stop_loss = args.stop_loss
+    total_timesteps = args.total_timesteps
+    
+    model = train(
+        symbol_train=symbol_train, 
+        symbol_eval =symbol_eval, 
+        window_size=window_size,
+        target_return=target_return,
+        stop_loss=stop_loss,
+        total_timesteps=total_timesteps
+        )
     # 保存模型
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     model_save_path = f"rppo_trading_model_{timestamp}"

@@ -142,7 +142,7 @@ def create_env(symbol: str, common_env_params: dict, target_return: float, stop_
     # Wrap the environment with standard wrappers for statistics, vectorization, and normalization
     env = RecordEpisodeStatistics(env)  # Records episode statistics (reward, length)
     env = DummyVecEnv([lambda: env])    # Converts the environment to a vectorized environment
-    env = VecNormalize(env, norm_obs=True, norm_reward=False) # Normalizes observations, but not rewards
+    env = VecNormalize(env, norm_obs=True, norm_reward=True,clip_reward=5) # Normalizes observations, but not rewards
     
     return env
 

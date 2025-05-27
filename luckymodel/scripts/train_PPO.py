@@ -13,7 +13,7 @@ from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoMod
 import warnings
 from envs.env import make_env
 from callbacks.profit_curriculum_callback import ProfitCurriculumCallback,EpisodeMetricsCallback,EntropyScheduler
-from .utils import RobustCosineSchedule
+from scripts.utils import RobustCosineSchedule
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RecordEpisodeStatistics
@@ -102,8 +102,8 @@ default_config = {
         'reset_num_timesteps': True, # Whether to reset the timestep counter at the beginning of learning
     },
     # --- Callback Toggles ---
-    'use_eval_callback': True,         # Master toggle for EvalCallback (and nested EarlyStopping)
-    'use_progress_bar_callback': True, # Master toggle for the separate ProgressBarCallback
+    'use_eval_callback': False,         # Master toggle for EvalCallback (and nested EarlyStopping)
+    'use_progress_bar_callback': False, # Master toggle for the separate ProgressBarCallback
 }
 
 

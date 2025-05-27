@@ -1,18 +1,19 @@
 import sys
+import copy # Added for deepcopy
 
 from stable_baselines3 import PPO
 sys.path.append("../")
 import datetime
 import argparse
-import numpy as np
-from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnRewardThreshold
-from stable_baselines3.common.callbacks import StopTrainingOnNoModelImprovement, ProgressBarCallback
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, ProgressBarCallback
+# StopTrainingOnRewardThreshold was removed
 
-from sb3_contrib import RecurrentPPO
-from stable_baselines3.common.utils import get_schedule_fn
+# from sb3_contrib import RecurrentPPO # Removed as it's not used
+# from stable_baselines3.common.utils import get_schedule_fn # Removed as it's not used
 import warnings
 from envs.env import make_env
 from callbacks.profit_curriculum_callback import ProfitCurriculumCallback,EpisodeMetricsCallback,EntropyScheduler
+from .utils import RobustCosineSchedule
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RecordEpisodeStatistics
@@ -20,213 +21,349 @@ from gymnasium.wrappers import RecordEpisodeStatistics
 warnings.filterwarnings("ignore", category=ResourceWarning)
 warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
 
-class RobustCosineSchedule:
-    def __init__(self, initial_lr=1e-6, final_lr=1e-3, warmup_ratio=0.2):
-        """
-        工业级稳健的学习率调度器
-        特点：
-        1. 双重数值钳制
-        2. 浮点误差补偿
-        3. 自动范围校正
-        """
-        self.initial_lr = float(initial_lr)
-        self.final_lr = float(final_lr)
-        self.warmup_ratio = float(warmup_ratio)
-        
-        # 自动校准参数
-        self._validate_parameters()
-        
-    def _validate_parameters(self):
-        """参数合法性检查"""
-        assert self.initial_lr > 0, "初始学习率必须是正数"
-        assert self.final_lr >= self.initial_lr, "峰值学习率不能小于初始值"
-        assert 0 < self.warmup_ratio < 1, "预热比例必须在(0,1)区间"
-        
-        # 防止浮点误差导致的计算问题
-        self.epsilon = np.finfo(float).eps * 100
-        
-    def __call__(self, progress):
-        """
-        progress: 从1.0（开始）到0.0（结束）的进度
-        返回：计算后的学习率
-        """
-        # 强制进度值合法化
-        progress = np.clip(float(progress), 0.0, 1.0)
-        
-        # 阶段1：线性预热
-        if progress > (1 - self.warmup_ratio):
-            warmup_progress = (1 - progress) / self.warmup_ratio  # 更直观的计算
-            return self._safe_lerp(0.0, self.final_lr, warmup_progress)
-        
-        # 阶段2：改进型余弦退火
-        decay_progress = progress / (1 - self.warmup_ratio)
-        cosine_value = np.cos(np.pi * decay_progress)
-        
-        # 使用线性插值替代原始公式
-        return self._safe_lerp(self.final_lr, self.initial_lr, 0.5*(1 + cosine_value))
+# --- Default Configuration ---
+# Centralized configuration for the training script.
+# These values can be overridden by command-line arguments.
+default_config = {
+    # --- Data and Symbols ---
+    'symbol_train': '300059',  # Stock symbol for training
+    'symbol_eval': '300308',   # Stock symbol for evaluation
+
+    # --- Learning Rate Schedule ---
+    'learning_rate_schedule_params': {
+        'initial_lr': 2e-5,    # Starting learning rate
+        'final_lr': 2e-4,      # Peak learning rate after warmup
+        'warmup_ratio': 0.05,  # Proportion of total steps for linear warmup
+    },
+
+    # --- PPO Algorithm Parameters ---
+    'ppo_params': {
+        'n_steps': 1024,          # Number of steps to run for each environment per update
+        'batch_size': 512,        # Minibatch size for PPO updates
+        'n_epochs': 10,           # Number of epochs when optimizing the surrogate loss
+        'clip_range_initial': 0.2,# Initial clipping parameter for PPO
+        'clip_range_final': 0.1,  # Final clipping parameter (linearly annealed)
+        'ent_coef': 0.05,         # Entropy coefficient for exploration
+        'gamma': 0.95,            # Discount factor for future rewards
+        'device': "cpu",          # Device to use for training ('cpu' or 'cuda')
+        'seed': 42,               # Random seed for reproducibility
+    },
+
+    # --- Environment Settings ---
+    'common_env_params': {
+        'window_size': 6,          # Observation window size (number of past days)
+        'eval': False,             # Base environment mode (set true in create_env for eval)
+        'positions': [0, 0.5, 1],  # Allowed positions (e.g., short, neutral, long)
+        'trading_fees': 0.01/100,  # Percentage trading fee
+        'portfolio_initial_value': 1000000, # Initial portfolio value
+        'max_episode_duration': 48 * 10,    # Max steps per episode
+        'render_mode': "logs",     # Environment render mode
+        'verbose': 0,              # Environment verbosity level
+    },
+
+    # --- Path Settings ---
+    'paths': {
+        'tensorboard_log_dir': "../logs/stock_trading2/", # Directory for TensorBoard logs
+        'best_model_save_path': "../checkpoints/best_models/", # Directory to save best models during evaluation
+        'model_save_prefix': "rppo_trading_model",       # Prefix for final saved model filename
+        'tb_log_name': "ppo_new_reward",                 # Name for the TensorBoard log run
+    },
+
+    # --- Training Control ---
+    'total_timesteps': int(2e6), # Total number of timesteps to train the agent
+    'target_return': 0.05,       # Target return for the training environment's reward function
+    'stop_loss': 0.15,           # Stop loss threshold for the training environment
+    'eval_stop_loss': 0.1,       # Stop loss threshold for the evaluation environment
+
+    # --- Callback Configurations ---
+    # Evaluation Callback (integrates Early Stopping)
+    'eval_callback_params': {
+        'eval_freq': 48 * 22,        # How_often to perform evaluation (in steps)
+        'n_eval_episodes': 10000,    # Number of episodes to run for evaluation
+        'verbose': 0,                # Verbosity level for evaluation callback
+        'deterministic': True,       # Whether to use deterministic actions for evaluation
+        'render': False,             # Whether to render the environment during evaluation
+    },
+    # Early Stopping (used by EvalCallback)
+    'early_stopping_params': {
+        'max_no_improvement_evals': 100, # Number of evaluations with no improvement before stopping
+        'min_evals': 50,                 # Minimum number of evaluations before early stopping can occur
+        'verbose': 1,                    # Verbosity level for early stopping
+    },
+    # Entropy Scheduler Callback
+    'entropy_scheduler_params': {
+        'initial_value': 0.08, # Initial entropy coefficient
+        'final_value': 0.001,  # Final entropy coefficient (linearly annealed)
+    },
+    # Parameters for model.learn()
+    'model_learn_params':{
+        'progress_bar': True,        # Whether to show SB3's internal progress bar
+        'log_interval': 10,          # Log training information every N episodes
+        'reset_num_timesteps': True, # Whether to reset the timestep counter at the beginning of learning
+    },
+    # --- Callback Toggles ---
+    'use_eval_callback': True,         # Master toggle for EvalCallback (and nested EarlyStopping)
+    'use_progress_bar_callback': True, # Master toggle for the separate ProgressBarCallback
+}
+
+
+def create_env(symbol: str, common_env_params: dict, target_return: float, stop_loss: float, is_eval: bool = False, eval_stop_loss: float = 0.1):
+    """
+    Creates, wraps, and prepares a trading environment for training or evaluation.
+
+    Args:
+        symbol (str): The stock symbol (e.g., '300059') for which to create the environment.
+        common_env_params (dict): A dictionary of parameters common to both training and evaluation environments.
+        target_return (float): The target return percentage used in the reward calculation.
+        stop_loss (float): The stop-loss percentage for the training environment.
+        is_eval (bool, optional): Flag indicating if the environment is for evaluation. 
+                                  If True, `eval_stop_loss` is used. Defaults to False.
+        eval_stop_loss (float, optional): The stop-loss percentage specifically for the evaluation environment. 
+                                          Defaults to 0.1.
+
+    Returns:
+        stable_baselines3.common.vec_env.VecNormalize: The fully wrapped and normalized vectorized environment.
+    """
+    # Create a mutable copy of common parameters to avoid modifying the original dict
+    env_params = common_env_params.copy()
     
-    def _safe_lerp(self, start, end, weight):
-        """带保护的线性插值计算"""
-        weight = np.clip(weight, 0.0, 1.0)
-        # 添加微小偏移防止浮点误差
-        return start + (end - start + self.epsilon) * weight  
-     
-def train(symbol_train: str,
-          symbol_eval: str,
-          window_size: int | None = None,
-          target_return: float = 0.1,  # 策略目标收益率，超过视为成功完成，给予高额奖励
-          stop_loss: float = 0.1,  # 最小目标收益率，低于视为失败，给予惩罚
-          total_timesteps: int = 1e7
-          ):
-    # 定义公共环境参数
-    common_env_params = {
-        'window_size': window_size,
-        'eval': False,
-        'positions': [0, 0.5, 1],
-        'trading_fees': 0.01/100,
-        'portfolio_initial_value': 1000000,
-        'max_episode_duration': 48 * 10,
-        'target_return': target_return,
-        'stop_loss': stop_loss,
-        'render_mode': "logs",
-        'verbose': 0
-    }
-    # 创建训练环境（可添加训练特有的参数）
-    train_env = make_env(
-        symbol=symbol_train,
-        **common_env_params
+    # Set environment-specific parameters based on whether it's for evaluation or training
+    env_params['target_return'] = target_return 
+    if is_eval:
+        env_params['stop_loss'] = eval_stop_loss # Apply specific stop-loss for evaluation
+        env_params['eval'] = True                # Set 'eval' flag for make_env if it uses it
+    else:
+        env_params['stop_loss'] = stop_loss      # Apply training stop-loss
+        env_params['eval'] = False               # Ensure 'eval' flag is False for training
+
+    # Create the base environment using the make_env utility
+    env = make_env(symbol=symbol, **env_params)
+    
+    # Wrap the environment with standard wrappers for statistics, vectorization, and normalization
+    env = RecordEpisodeStatistics(env)  # Records episode statistics (reward, length)
+    env = DummyVecEnv([lambda: env])    # Converts the environment to a vectorized environment
+    env = VecNormalize(env, norm_obs=True, norm_reward=False) # Normalizes observations, but not rewards
+    
+    return env
+
+
+def train(config: dict):
+    """
+    Sets up and trains a Proximal Policy Optimization (PPO) agent for stock trading.
+
+    The function configures the training environment, evaluation environment,
+    learning rate scheduler, PPO model, and various callbacks based on the provided
+    configuration dictionary. It then initiates the training process and returns
+    the trained model.
+
+    Args:
+        config (dict): A dictionary containing all necessary parameters for setting up
+                       and running the training process. This includes parameters for
+                       data, PPO algorithm, environment settings, paths, training control,
+                       and callbacks. See `default_config` for an example structure.
+
+    Returns:
+        stable_baselines3.PPO: The trained PPO model.
+    """
+    # --- Environment Setup ---
+    # Prepare common parameters for environment creation, ensuring window_size is correctly passed
+    env_creation_params = config['common_env_params'].copy()
+
+    # Create the training environment
+    print(f"Creating training environment for symbol: {config['symbol_train']}")
+    train_env = create_env(
+        symbol=config['symbol_train'],
+        common_env_params=env_creation_params,
+        target_return=config['target_return'],
+        stop_loss=config['stop_loss'],
+        is_eval=False
     )
-    
-    # 创建环境并包装为 VecNormalize
-    base_env = RecordEpisodeStatistics(train_env)  # 关键步骤！
-    train_env = DummyVecEnv([lambda: base_env])
-    train_env = VecNormalize(train_env, norm_obs=True, norm_reward=False)
    
-
-    # 创建评估环境（可添加评估特有的参数）
-    eval_env = make_env(
-        symbol=symbol_eval,
-        **{**common_env_params, 'stop_loss': 0.1}   # 评估使用更严格条件,使用字典解包优先级（Python 3.5+）
+    # Create the evaluation environment
+    print(f"Creating evaluation environment for symbol: {config['symbol_eval']}")
+    eval_env = create_env(
+        symbol=config['symbol_eval'],
+        common_env_params=env_creation_params,
+        target_return=config['target_return'], # Eval might use the same target_return or a different one if specified
+        stop_loss=config['stop_loss'],         # Base stop_loss from training config
+        is_eval=True,
+        eval_stop_loss=config['eval_stop_loss'] # Specific stop_loss for evaluation
     )
     
-    eval_env = RecordEpisodeStatistics(eval_env)  # 关键步骤！
-    eval_env = DummyVecEnv([lambda: eval_env])
-    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False)  
-    # eval_env = Monitor(eval_env, './eval_logs')  
-    # 使用PPO算法训练模型   
-
-    min_lr = 2e-5    # 训练结束时
-    max_lr = 2e-4      # 预热结束后的峰值学习率
-    warmup_ratio = 0.05    # 前10%训练时间用于预热
-    # 在训练神经网络时，前20%训练时间用于预热（Warmup）是一个重要的策略。
-    # 其核心好处是稳定初始训练过程，避免模型在初始阶段由于随机权重导致的剧烈波动。
-    # ​​问题​​：网络初始权重是随机初始化的，直接使用大学习率会导致：
-    #     梯度方向不稳定（不同batch的梯度差异大）
-    #     损失函数剧烈震荡
-    # ​​解决​​：从小学习率逐步增大，让模型先"摸索"数据分布    
+    # --- Learning Rate Scheduler Setup ---
+    lr_params = config['learning_rate_schedule_params']
     lr_scheduler = RobustCosineSchedule(
-        initial_lr=min_lr,
-        final_lr=max_lr,
-        warmup_ratio=warmup_ratio
+        initial_lr=lr_params['initial_lr'],
+        final_lr=lr_params['final_lr'],
+        warmup_ratio=lr_params['warmup_ratio']
     )   
     
-    # 动态调整约束强度
+    # --- PPO Model Instantiation ---
+    ppo_p = config['ppo_params']
+    # Define a linear schedule function for PPO's clip_range
     def linear_schedule(initial_value, final_value):
-        """返回一个调度函数"""
+        """Returns a function that provides a linearly changing value based on progress."""
         def func(progress_remaining):
+            """progress_remaining goes from 1.0 to 0.0"""
             return final_value + (initial_value - final_value) * progress_remaining
         return func   
 
-    device = "cpu" #'cuda' if torch.cuda.is_available() else 'cpu'
-    print("torch.cuda.is_available()=", torch.cuda.is_available())
-    # net_arch = [ {"pi": [256,256], "vf": [256,256]} ]
-
+    print(f"Torch CUDA available: {torch.cuda.is_available()}, Using device: {ppo_p['device']}")
+    # Note: `net_arch` could be added to `ppo_params` for custom network architectures.
     model = PPO(
-        "MlpPolicy",
+        "MlpPolicy",  # Standard Multi-Layer Perceptron policy
         train_env,
-        learning_rate= lr_scheduler,  
-        # policy_kwargs=policy_kwargs,
-        n_steps=1024,
-        batch_size=512,  # 需满足batch_size <= n_steps
-        n_epochs=10,
-        clip_range=linear_schedule(0.2, 0.1),  # 逐渐收紧PPO clip范围
-        ent_coef=0.05, 
-        gamma=0.95,  # 延长收益视野
-        # gae_lambda=0.98,
-        # policy_kwargs={'net_arch': net_arch},
-        verbose=0,
-        device=device,
-        seed=42,
-        tensorboard_log=f"../logs/stock_trading2/")
-    # 评估回调
-    early_stop_callback = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=100,  # 允许的连续无提升评估次数
-        min_evals=50,                  # 最少评估次数后才开始检查
-        verbose=1                     # 是否打印日志
+        learning_rate=lr_scheduler,  
+        n_steps=ppo_p['n_steps'],          # Number of steps per environment per update
+        batch_size=ppo_p['batch_size'],    # Minibatch size
+        n_epochs=ppo_p['n_epochs'],        # Number of optimization epochs per update
+        clip_range=linear_schedule(ppo_p['clip_range_initial'], ppo_p['clip_range_final']), # PPO clipping
+        ent_coef=ppo_p['ent_coef'],        # Entropy coefficient for encouraging exploration
+        gamma=ppo_p['gamma'],              # Discount factor for future rewards
+        verbose=0,                         # Verbosity level (0 for no output, 1 for info)
+        device=ppo_p['device'],            # PyTorch device
+        seed=ppo_p['seed'],                # Random seed
+        tensorboard_log=config['paths']['tensorboard_log_dir'] # Directory for TensorBoard logs
     )
-    eval_callback = EvalCallback(
-        eval_env=eval_env,
-        # callback_on_new_best=early_stop_callback,  # 绑定早停回调
-        best_model_save_path="../checkpoints/best_models/",
-        eval_freq=48 * 22,
-        n_eval_episodes=10000,
-        verbose=0,
-        deterministic=True,
-        render=False
-    )
-    # progressBarCallback = ProgressBarCallback()
     
-    # 创建回调实例
-    entropy_scheduler_callback = EntropyScheduler(initial_value=0.08, final_value=0.001)
-    curriculum_callback = ProfitCurriculumCallback()
+    # --- Callbacks Setup ---
+    print("Setting up callbacks...")
+    active_callbacks = []
+
+    # Entropy Scheduler Callback: Dynamically adjusts the entropy coefficient during training.
+    entropy_p = config['entropy_scheduler_params']
+    active_callbacks.append(EntropyScheduler(
+        initial_value=entropy_p['initial_value'], 
+        final_value=entropy_p['final_value']
+    ))
+
+    # Profit Curriculum Callback: (Assumed to implement a curriculum learning strategy based on profit)
+    active_callbacks.append(ProfitCurriculumCallback())
+
+    # Episode Metrics Callback: (Assumed to log custom metrics per episode)
+    active_callbacks.append(EpisodeMetricsCallback())
+
+    # Evaluation Callback with Early Stopping:
+    # Periodically evaluates the model on the evaluation environment.
+    # If `callback_on_new_best` is set, it triggers early stopping if performance plateaus.
+    if config.get('use_eval_callback', True): 
+        early_stop_p = config['early_stopping_params']
+        early_stop_callback = StopTrainingOnNoModelImprovement(
+            max_no_improvement_evals=early_stop_p['max_no_improvement_evals'],
+            min_evals=early_stop_p['min_evals'],
+            verbose=early_stop_p['verbose']
+        )
+        eval_cb_p = config['eval_callback_params']
+        eval_callback = EvalCallback(
+            eval_env=eval_env,
+            callback_on_new_best=early_stop_callback, # Integrate early stopping
+            best_model_save_path=config['paths']['best_model_save_path'],
+            eval_freq=eval_cb_p['eval_freq'],
+            n_eval_episodes=eval_cb_p['n_eval_episodes'],
+            verbose=eval_cb_p['verbose'],
+            deterministic=eval_cb_p['deterministic'],
+            render=eval_cb_p['render']
+        )
+        active_callbacks.append(eval_callback)
+        print("EvalCallback with EarlyStopping enabled.")
+
+    # ProgressBar Callback: Displays a progress bar during training.
+    if config.get('use_progress_bar_callback', True): 
+        active_callbacks.append(ProgressBarCallback())
+        print("ProgressBarCallback enabled.")
       
+    # --- Model Training ---
+    print(f"Starting model training for {config['total_timesteps']} timesteps...")
+    learn_p = config['model_learn_params']
     model.learn(
-        total_timesteps=total_timesteps,  #8_000_000,
-        progress_bar=True,
-        log_interval=10,
-        tb_log_name=f"ppo_new_reward",
-        callback=[entropy_scheduler_callback,
-                  curriculum_callback,
-                  EpisodeMetricsCallback()],
-        # callback=[curriculum_callback],
-        # callback=[eval_callback,
-        #           progressBarCallback],
-        reset_num_timesteps=True
+        total_timesteps=config['total_timesteps'],
+        progress_bar=learn_p['progress_bar'], # Use SB3's built-in TQDM progress bar
+        log_interval=learn_p['log_interval'],   # Log every N episodes
+        tb_log_name=config['paths']['tb_log_name'], # Name of the run for TensorBoard
+        callback=active_callbacks,              # List of callbacks to use during training
+        reset_num_timesteps=learn_p['reset_num_timesteps'] # Whether to reset timestep counter
     )
-    print("训练时间步数=", model.num_timesteps)
+    print(f"Training completed. Total timesteps: {model.num_timesteps}")
     return model
 
 
-if __name__ == "__main__":
-    # 参数解析
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--symbol_train', type=str, default='300059',
-                        help='训练使用的股票代码')
-    parser.add_argument('--symbol_eval', type=str, default='300308',
-                        help='评估使用的股票代码')
+def parse_args():
+    """
+    Parses command-line arguments for the training script.
 
-    parser.add_argument('--window_size', type=int, default=6)
-    parser.add_argument('--target_return', type=float, default=0.05)
-    parser.add_argument('--stop_loss', type=float, default=0.15)
-    parser.add_argument('--total_timesteps', type=int, default=2e6)
+    Utilizes `default_config` to set default values for arguments, ensuring consistency
+    and providing informative help messages that reflect these defaults.
 
-    args = parser.parse_args()
-    symbol_train = args.symbol_train
-    symbol_eval = args.symbol_eval
-    window_size = args.window_size
-    target_return = args.target_return
-    stop_loss = args.stop_loss
-    total_timesteps = args.total_timesteps
+    Returns:
+        argparse.Namespace: An object containing the parsed command-line arguments.
+    """
+    parser = argparse.ArgumentParser(description="Train a PPO model for stock trading.")
     
-    model = train(
-        symbol_train=symbol_train, 
-        symbol_eval =symbol_eval, 
-        window_size=None,
-        target_return=target_return,
-        stop_loss=stop_loss,
-        total_timesteps=total_timesteps
-        )
-    # 保存模型
+    # General training arguments
+    parser.add_argument('--symbol_train', type=str, default=default_config['symbol_train'],
+                        help=f"Stock symbol for training (default: {default_config['symbol_train']})")
+    parser.add_argument('--symbol_eval', type=str, default=default_config['symbol_eval'],
+                        help=f"Stock symbol for evaluation (default: {default_config['symbol_eval']})")
+    parser.add_argument('--window_size', type=int, default=default_config['common_env_params']['window_size'],
+                        help=f"Observation window size for the environment (default: {default_config['common_env_params']['window_size']})")
+    parser.add_argument('--target_return', type=float, default=default_config['target_return'],
+                        help=f"Target return percentage for training rewards (default: {default_config['target_return']})")
+    parser.add_argument('--stop_loss', type=float, default=default_config['stop_loss'],
+                        help=f"Stop-loss percentage for training environment (default: {default_config['stop_loss']})")
+    parser.add_argument('--total_timesteps', type=int, default=default_config['total_timesteps'],
+                        help=f"Total number of timesteps for training (default: {default_config['total_timesteps']})")
+    
+    # Path configuration arguments
+    parser.add_argument('--tensorboard_log_dir', type=str, default=default_config['paths']['tensorboard_log_dir'],
+                        help=f"Directory for TensorBoard logs (default: \"{default_config['paths']['tensorboard_log_dir']}\")")
+    parser.add_argument('--best_model_save_path', type=str, default=default_config['paths']['best_model_save_path'],
+                        help=f"Directory to save best models during evaluation (default: \"{default_config['paths']['best_model_save_path']}\")")
+    parser.add_argument('--model_save_prefix', type=str, default=default_config['paths']['model_save_prefix'],
+                        help=f"Filename prefix for the final saved model (default: \"{default_config['paths']['model_save_prefix']}\")")
+    parser.add_argument('--tb_log_name', type=str, default=default_config['paths']['tb_log_name'],
+                        help=f"Specific name for the TensorBoard log run (default: \"{default_config['paths']['tb_log_name']}\")")
+    
+    args = parser.parse_args()
+    return args
+
+
+if __name__ == "__main__":
+    # --- Argument Parsing ---
+    # Parse command-line arguments. Defaults are sourced from `default_config`.
+    cli_args = parse_args()
+
+    # --- Configuration Setup ---
+    # Create a deep copy of the default configuration to allow modifications.
+    run_config = copy.deepcopy(default_config)
+
+    # Override default configuration with any values provided via command-line arguments.
+    run_config['symbol_train'] = cli_args.symbol_train
+    run_config['symbol_eval'] = cli_args.symbol_eval
+    run_config['total_timesteps'] = cli_args.total_timesteps
+    run_config['target_return'] = cli_args.target_return
+    run_config['stop_loss'] = cli_args.stop_loss
+    
+    # Update nested dictionary for common_env_params
+    run_config['common_env_params']['window_size'] = cli_args.window_size
+    
+    # Update nested dictionary for paths
+    run_config['paths']['tensorboard_log_dir'] = cli_args.tensorboard_log_dir
+    run_config['paths']['best_model_save_path'] = cli_args.best_model_save_path
+    run_config['paths']['model_save_prefix'] = cli_args.model_save_prefix
+    run_config['paths']['tb_log_name'] = cli_args.tb_log_name
+    
+    # Example: How to potentially override other config values if more CLI args were added
+    # if cli_args.device is not None: # Assuming 'device' could be a CLI argument
+    #    run_config['ppo_params']['device'] = cli_args.device
+
+    # --- Model Training ---
+    # Train the PPO model using the prepared configuration.
+    print("Initializing training process...")
+    model = train(config=run_config)
+    
+    # --- Model Saving ---
+    # Save the trained model with a timestamp.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-    model_save_path = f"rppo_trading_model_{timestamp}"
+    model_save_path = f"{run_config['paths']['model_save_prefix']}_{timestamp}.zip"
     model.save(model_save_path)
+    print(f"Trained model saved to: {model_save_path}")

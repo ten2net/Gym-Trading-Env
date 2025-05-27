@@ -33,7 +33,7 @@ default_config = {
     'learning_rate_schedule_params': {
         'initial_lr': 2e-5,    # Starting learning rate
         'final_lr': 2e-4,      # Peak learning rate after warmup
-        'warmup_ratio': 0.05,  # Proportion of total steps for linear warmup
+        'warmup_ratio': 0.1,  # Proportion of total steps for linear warmup
     },
 
     # --- PPO Algorithm Parameters ---
@@ -44,14 +44,14 @@ default_config = {
         'clip_range_initial': 0.2,# Initial clipping parameter for PPO
         'clip_range_final': 0.1,  # Final clipping parameter (linearly annealed)
         'ent_coef': 0.05,         # Entropy coefficient for exploration
-        'gamma': 0.95,            # Discount factor for future rewards
+        'gamma': 0.92,            # Discount factor for future rewards
         'device': "cpu",          # Device to use for training ('cpu' or 'cuda')
         'seed': 42,               # Random seed for reproducibility
     },
 
     # --- Environment Settings ---
     'common_env_params': {
-        'window_size': 6,          # Observation window size (number of past days)
+        'window_size': None,          # Observation window size (number of past days)
         'eval': False,             # Base environment mode (set true in create_env for eval)
         'positions': [0, 0.5, 1],  # Allowed positions (e.g., short, neutral, long)
         'trading_fees': 0.01/100,  # Percentage trading fee
@@ -70,7 +70,7 @@ default_config = {
     },
 
     # --- Training Control ---
-    'total_timesteps': int(2e6), # Total number of timesteps to train the agent
+    'total_timesteps': int(4e6), # Total number of timesteps to train the agent
     'target_return': 0.05,       # Target return for the training environment's reward function
     'stop_loss': 0.15,           # Stop loss threshold for the training environment
     'eval_stop_loss': 0.1,       # Stop loss threshold for the evaluation environment

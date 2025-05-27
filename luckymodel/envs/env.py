@@ -238,41 +238,47 @@ def make_env(
 
     # Generating features
     # WARNING : the column names need to contain keyword 'feature' !
-    df["feature_close"] = 100 * df["close"].pct_change()
-    df["feature_open"] = df["open"] - df["close"] / (df["open"] + df["close"])
-    df["feature_high"] = df["high"] - df["close"] / (df["high"] + df["close"])
-    df["feature_low"] = df["low"] - df["close"] / (df["low"] + df["close"])
+    df["feature_close"] = df["close"].pct_change()
+    df["feature_high"] = df["high"].pct_change()
+    df["feature_low"] = df["low"].pct_change()
+    df["feature_volume"] = df["volume"].pct_change()
     df['dt'] = df.index.date
     # 2. 获取每日开盘价
     daily_open = df.groupby('dt')['open'].transform('first')
+    daily_volume = df.groupby('dt')['volume'].transform('first')
     # 3. 将每日开盘价合并回原始数据框
     df = df.merge(daily_open.rename('daily_open'),
                   left_on='date',
                   right_index=True)
-    df['feature_close_open_yoy'] = df['close'] - \
-        df['daily_open'] / (df['close'] + df['daily_open'])
+    df = df.merge(daily_volume.rename('daily_volume'),
+                  left_on='date',
+                  right_index=True)
+    df['feature_close_open_yoy'] = df['close'] / df['daily_open']
+    df['feature_high_open_yoy'] = df['high'] / df['daily_open']
+    df['feature_low_open_yoy'] = df['low'] / df['daily_open']
+    df['feature_volume_open_yoy'] = df['volume'] / df['daily_volume']
     # df["feature_volume"] = df["volume"] / df["volume"].rolling(12).max()
     points_per_day = 48  # 24小时*60分钟/5分钟=288，但实际交易时间可能更少
+    # 滞后特征
+    for lag in [1, points_per_day, points_per_day*5]:  # 1个点前，1天前，5天前
+        df[f'feature_close_lag_{lag}'] = df['close'] / df['close'].shift(lag)
+        df[f'feature_volume_lag_{lag}'] =  df['volume'] / df['volume'].shift(lag)    
     df['close_prev'] = df['close'].shift(points_per_day)
     df['volume_prev'] = df['volume'].shift(points_per_day)
     df['cum_volume'] = df.groupby('dt')['volume'].cumsum()
     df['cum_volume_prev'] = df["cum_volume"].shift(points_per_day)
 
-    df['feature_close_yoy'] = (
-        df['close'] - df['close_prev']) / (df['close'] + df['close_prev'])
-    df['feature_volume_sum'] = (
-        df['cum_volume'] - df['cum_volume_prev']) / (df['cum_volume'] + df['cum_volume_prev'])
-    df['feature_volume'] = (df['volume'] - df['volume_prev']) / \
-        (df['volume'] + df['volume_prev'])
+    df['feature_close_yoy'] = df['close'] / df['close_prev']
+    df['feature_volume_sum'] = df['cum_volume'] / df['cum_volume_prev']
     df = df.drop(columns=['dt', 'daily_open',
                  'volume_prev', 'cum_volume', 'cum_volume_prev'])
     # print(df[-50:])
-    fe = FeatureEngineer(window_size=3)
+    fe = FeatureEngineer(window_size=window_size)
     df = fe.compute_features(df)
     numeric_cols = df.columns
     for col in numeric_cols:
         if col.startswith("feature"):
-            df[col] = df[col].round(3)
+            df[col] = df[col].round(6)
     df.dropna(inplace=True)
     df.to_csv(f"{symbol}.csv", index=True, encoding='utf_8_sig')
     env = gym.make(

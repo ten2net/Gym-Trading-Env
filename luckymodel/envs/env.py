@@ -238,10 +238,14 @@ def make_env(
 
     # Generating features
     # WARNING : the column names need to contain keyword 'feature' !
-    df["feature_close"] = df["close"].pct_change()
-    df["feature_high"] = df["high"].pct_change()
-    df["feature_low"] = df["low"].pct_change()
-    df["feature_volume"] = df["volume"].pct_change()
+    df["feature_close"] =  df["close"] / df["close"].shift(1)
+    df["feature_high"] =  df["high"] / df["high"].shift(1)
+    df["feature_low"] =  df["low"] / df["low"].shift(1)
+    df["feature_volume"] = df["volume"] / df["volume"].shift(1)
+    # df["feature_close"] = 100 * df["close"].pct_change()
+    # df["feature_high"] =  100 *df["high"].pct_change()
+    # df["feature_low"] =  100 *df["low"].pct_change()
+    # df["feature_volume"] = df["volume"].pct_change()
     df['dt'] = df.index.date
     # 2. 获取每日开盘价
     daily_open = df.groupby('dt')['open'].transform('first')
@@ -273,8 +277,8 @@ def make_env(
     df = df.drop(columns=['dt', 'daily_open',
                  'volume_prev', 'cum_volume', 'cum_volume_prev'])
     # print(df[-50:])
-    fe = FeatureEngineer(window_size=window_size)
-    df = fe.compute_features(df)
+    # fe = FeatureEngineer(window_size=window_size)
+    # df = fe.compute_features(df)
     numeric_cols = df.columns
     for col in numeric_cols:
         if col.startswith("feature"):

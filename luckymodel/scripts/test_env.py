@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import gymnasium as gym
 from stable_baselines3.common.monitor import Monitor
-from basic_model.utils.feature_engineering import FeatureEngineer 
+from envs.feature_engineering import FeatureEngineer 
 from gym_trading_env.environments import TradingEnv
 
 import warnings

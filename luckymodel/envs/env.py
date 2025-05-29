@@ -395,8 +395,8 @@ def make_env(
     df = df.drop(columns=['dt', 'daily_open',
                  'volume_prev', 'cum_volume', 'cum_volume_prev'])
     # print(df[-50:])
-    fe = FeatureEngineer(window_size=window_size)
-    df = fe.compute_features(df)
+    # fe = FeatureEngineer(window_size=window_size)
+    # df = fe.compute_features(df)
     numeric_cols = df.columns
     for col in numeric_cols:
         if col.startswith("feature"):

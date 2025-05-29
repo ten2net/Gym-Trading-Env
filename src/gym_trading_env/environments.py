@@ -122,7 +122,6 @@ class TradingEnv(gym.Env):
         obs_shape = [self._nb_features]
         if self.windows is not None:
             obs_shape = [self.windows, self._nb_features]
-
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -398,21 +397,23 @@ class MultiDatasetTradingEnv(TradingEnv):
         dataset_dir: str,
         *args,
         preprocess=lambda df: df,
-        episodes_between_switch=10,
+        episodes_between_switch=2000,
         **kwargs
     ):
         self.dataset_paths = sorted(
             glob.glob(str(Path(dataset_dir) / "*.pkl")))
         if not self.dataset_paths:
             raise FileNotFoundError(f"No datasets found in {dataset_dir}")
-
         self.current_dataset = None
         self.episodes_between_switch = episodes_between_switch
         self.episode_count = 0
         self.preprocess = preprocess
-
-        super().__init__(pd.DataFrame(), *args, **kwargs)
+        init_dataset = np.random.choice(self.dataset_paths)
+        raw_df = pd.read_pickle(init_dataset)
+        processed_df = self.preprocess(raw_df)
+        super().__init__(processed_df, *args, **kwargs)
         self._load_next_dataset()
+  
 
     def _load_next_dataset(self):
         self.current_dataset = np.random.choice(self.dataset_paths)
@@ -421,8 +422,10 @@ class MultiDatasetTradingEnv(TradingEnv):
         self._process_data(processed_df)
 
     def reset(self, **kwargs):
+        # print( self.episode_count)
         if self.episode_count % self.episodes_between_switch == 0:
             self._load_next_dataset()
+            print(self.current_dataset)
 
         self.episode_count += 1
         return super().reset(**kwargs)

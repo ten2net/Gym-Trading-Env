@@ -11,7 +11,7 @@ from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoMod
 # from sb3_contrib import RecurrentPPO # Removed as it's not used
 # from stable_baselines3.common.utils import get_schedule_fn # Removed as it's not used
 import warnings
-from envs.env import make_env
+from envs.env import make_env, make_multi_dataset_env
 from callbacks.profit_curriculum_callback import ProfitCurriculumCallback,EpisodeMetricsCallback,EntropyScheduler
 from scripts.utils import RobustCosineSchedule
 import torch
@@ -25,10 +25,6 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 # Centralized configuration for the training script.
 # These values can be overridden by command-line arguments.
 default_config = {
-    # --- Data and Symbols ---
-    # 'symbol_train': '300059',  # Stock symbol for training
-    'symbol_train': '300520',  # Stock symbol for training
-    'symbol_eval': '300308',   # Stock symbol for evaluation
 
     # --- Learning Rate Schedule ---
     'learning_rate_schedule_params': {
@@ -43,7 +39,7 @@ default_config = {
         'batch_size': 512,        # Minibatch size for PPO updates
         'n_epochs': 10,           # Number of epochs when optimizing the surrogate loss
         'clip_range_initial': 0.2,# Initial clipping parameter for PPO
-        'clip_range_final': 0.15,  # Final clipping parameter (linearly annealed)
+        'clip_range_final': 0.1,  # Final clipping parameter (linearly annealed)
         'ent_coef': 0.05,         # Entropy coefficient for exploration
         'gamma': 0.97,            # Discount factor for future rewards
         'device': "cpu",          # Device to use for training ('cpu' or 'cuda')
@@ -64,10 +60,11 @@ default_config = {
 
     # --- Path Settings ---
     'paths': {
+        'raw_data_dir': "../../luckymodel/raw_data/pkl/m5/", # Directory for TensorBoard logs
         'tensorboard_log_dir': "../logs/stock_trading2/", # Directory for TensorBoard logs
         'best_model_save_path': "../checkpoints/best_models/", # Directory to save best models during evaluation
         'model_save_prefix': "rppo_trading_model",       # Prefix for final saved model filename
-        'tb_log_name': "ppo_300308",                 # Name for the TensorBoard log run
+        'tb_log_name': "ppo_multi",                 # Name for the TensorBoard log run
     },
 
     # --- Training Control ---
@@ -93,7 +90,7 @@ default_config = {
     },
     # Entropy Scheduler Callback
     'entropy_scheduler_params': {
-        'initial_value': 0.1, # Initial entropy coefficient
+        'initial_value': 0.08, # Initial entropy coefficient
         'final_value': 0.001,  # Final entropy coefficient (linearly annealed)
     },
     # Parameters for model.learn()
@@ -108,12 +105,12 @@ default_config = {
 }
 
 
-def create_env(symbol: str, common_env_params: dict, target_return: float, stop_loss: float, is_eval: bool = False, eval_stop_loss: float = 0.1):
+def create_env(raw_data_dir: str, common_env_params: dict, target_return: float, stop_loss: float, is_eval: bool = False, eval_stop_loss: float = 0.1):
     """
     Creates, wraps, and prepares a trading environment for training or evaluation.
 
     Args:
-        symbol (str): The stock symbol (e.g., '300059') for which to create the environment.
+        raw_data_dir (str): which to create the environment.
         common_env_params (dict): A dictionary of parameters common to both training and evaluation environments.
         target_return (float): The target return percentage used in the reward calculation.
         stop_loss (float): The stop-loss percentage for the training environment.
@@ -138,7 +135,7 @@ def create_env(symbol: str, common_env_params: dict, target_return: float, stop_
         env_params['eval'] = False               # Ensure 'eval' flag is False for training
 
     # Create the base environment using the make_env utility
-    env = make_env(symbol=symbol, **env_params)
+    env = make_multi_dataset_env(raw_data_dir=raw_data_dir, **env_params)
     
     # Wrap the environment with standard wrappers for statistics, vectorization, and normalization
     env = RecordEpisodeStatistics(env)  # Records episode statistics (reward, length)
@@ -171,9 +168,9 @@ def train(config: dict):
     env_creation_params = config['common_env_params'].copy()
 
     # Create the training environment
-    print(f"Creating training environment for symbol: {config['symbol_train']}")
+    print(f"Creating training environment for pkl: {config['paths']['raw_data_dir']}")
     train_env = create_env(
-        symbol=config['symbol_train'],
+        raw_data_dir=config['paths']['raw_data_dir'],
         common_env_params=env_creation_params,
         target_return=config['target_return'],
         stop_loss=config['stop_loss'],
@@ -181,9 +178,8 @@ def train(config: dict):
     )
    
     # Create the evaluation environment
-    print(f"Creating evaluation environment for symbol: {config['symbol_eval']}")
     eval_env = create_env(
-        symbol=config['symbol_eval'],
+        raw_data_dir=config['paths']['raw_data_dir'],
         common_env_params=env_creation_params,
         target_return=config['target_return'], # Eval might use the same target_return or a different one if specified
         stop_loss=config['stop_loss'],         # Base stop_loss from training config
@@ -239,16 +235,7 @@ def train(config: dict):
     ))
 
     # Profit Curriculum Callback: (Assumed to implement a curriculum learning strategy based on profit)
-    # 自定义参数（从0.03到0.15，在3e6步内线性增长）
-    curriculum_callback = ProfitCurriculumCallback(
-        max_steps=config['total_timesteps'],
-        initial_target=0.02,
-        final_target=0.12,
-        ent_coef_initial=entropy_p['initial_value'],
-        ent_coef_min=entropy_p['final_value'],
-        ent_coef_restore_ratio=0.5
-    )    
-    active_callbacks.append(curriculum_callback)
+    active_callbacks.append(ProfitCurriculumCallback())
 
     # Episode Metrics Callback: (Assumed to log custom metrics per episode)
     active_callbacks.append(EpisodeMetricsCallback())
@@ -310,10 +297,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train a PPO model for stock trading.")
     
     # General training arguments
-    parser.add_argument('--symbol_train', type=str, default=default_config['symbol_train'],
-                        help=f"Stock symbol for training (default: {default_config['symbol_train']})")
-    parser.add_argument('--symbol_eval', type=str, default=default_config['symbol_eval'],
-                        help=f"Stock symbol for evaluation (default: {default_config['symbol_eval']})")
     parser.add_argument('--window_size', type=int, default=default_config['common_env_params']['window_size'],
                         help=f"Observation window size for the environment (default: {default_config['common_env_params']['window_size']})")
     parser.add_argument('--target_return', type=float, default=default_config['target_return'],
@@ -324,6 +307,8 @@ def parse_args():
                         help=f"Total number of timesteps for training (default: {default_config['total_timesteps']})")
     
     # Path configuration arguments
+    parser.add_argument('--raw_data_dir', type=str, default=default_config['paths']['raw_data_dir'],
+                        help=f"Directory for pkl (default: \"{default_config['paths']['raw_data_dir']}\")")
     parser.add_argument('--tensorboard_log_dir', type=str, default=default_config['paths']['tensorboard_log_dir'],
                         help=f"Directory for TensorBoard logs (default: \"{default_config['paths']['tensorboard_log_dir']}\")")
     parser.add_argument('--best_model_save_path', type=str, default=default_config['paths']['best_model_save_path'],
@@ -346,9 +331,6 @@ if __name__ == "__main__":
     # Create a deep copy of the default configuration to allow modifications.
     run_config = copy.deepcopy(default_config)
 
-    # Override default configuration with any values provided via command-line arguments.
-    run_config['symbol_train'] = cli_args.symbol_train
-    run_config['symbol_eval'] = cli_args.symbol_eval
     run_config['total_timesteps'] = cli_args.total_timesteps
     run_config['target_return'] = cli_args.target_return
     run_config['stop_loss'] = cli_args.stop_loss
@@ -357,6 +339,7 @@ if __name__ == "__main__":
     run_config['common_env_params']['window_size'] = cli_args.window_size
     
     # Update nested dictionary for paths
+    run_config['paths']['raw_data_dir'] = cli_args.raw_data_dir
     run_config['paths']['tensorboard_log_dir'] = cli_args.tensorboard_log_dir
     run_config['paths']['best_model_save_path'] = cli_args.best_model_save_path
     run_config['paths']['model_save_prefix'] = cli_args.model_save_prefix

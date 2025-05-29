@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional, List, Literal
 import argparse
+from pathlib import Path
 
 
 
@@ -69,12 +70,35 @@ def calculate_reward(
     # 系数从-0.05→-0.04,降低基础惩罚，避免初期探索不足 
     # 指数从2→1.8 ,减缓后期惩罚增长速率，防止模型过早止损。
     # 乘数从2→1.2​​：缩小动态范围，平衡探索与利用。
-    TIME_PENALTY =-0.04 * (1 + 1.2 * progress_ratio**1.8) if training_steps > 1e6 else -0.04
+    # progress_ratio_coeff = 1 + 0.5 * (1 - progress_ratio **1.8)
+    # progress_ratio_coeff = 1 + 0.5 * (1 - np.sqrt(progress_ratio))  # 平方根衰减
+    progress_ratio_coeff = 1 + 0.5 * np.exp(-2 * progress_ratio) 
+    # TIME_PENALTY =-0.1 * (1 + 1.2 * progress_ratio_coeff) if training_steps > 1e6 else -0.1 * (1 + 1.8 * progress_ratio_coeff)
+    # 计算线性变化的 coeff (1.8 → 1.2)
+    max_training_steps = 4e6  # 根据实际情况调整
+    # 优化方案：Sigmoid 平滑过渡
+    # coeff = 1.8 - (training_steps / max_training_steps) * (1.8 - 1.2)
+    # coeff = max(1.2, min(1.8, coeff))  # 限制在 [1.2, 1.8] 之间
+    def smooth_clip(x, low=1.2, high=1.8, k=10):
+        """Sigmoid 平滑截断，避免突变"""
+        scale = high - low
+        return low + scale / (1 + np.exp(-k * (x - 0.5)))
+    coeff = smooth_clip(1.8 - (training_steps / max_training_steps) * 0.6)    
+    TIME_PENALTY = -0.05 * (1 + coeff * progress_ratio_coeff)
     
     done, truncated = False, False
     reward = TIME_PENALTY  # 基础时间惩罚
-    
-    
+    # 中间奖励（持仓波动率惩罚）
+    # volatility_penalty = -0.1 * np.std(history["portfolio_valuation",-10:])  
+    volatility_window=10
+    market_volatility = max(0.00001,np.std(history["price", -20:]))  # 市场基准波动率
+    low_vol_threshold = 0.5 * market_volatility    # 低波动阈值（如0.002~0.008）
+    penalty_coeff = 0.1 / low_vol_threshold  # 系数与阈值反向相关
+    volatility = np.std(history["portfolio_valuation",-volatility_window:]) /np.mean(history["portfolio_valuation",-volatility_window:]) # 相对波动率  
+    if volatility < low_vol_threshold:
+        volatility_penalty = penalty_coeff * (low_vol_threshold - volatility)  # 波动率越低，惩罚越重
+        reward -= volatility_penalty
+        # print(f"{market_volatility} volatility: {volatility}",volatility_penalty)
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT:
         # 提前完成奖励 = 基础奖励 + 提前完成奖励(指数衰减)
@@ -114,7 +138,7 @@ def calculate_reward(
         if return_ratio < 1.005:  # 基础达标区
             early_bonus = EARLY_BONUS * np.exp(-5 * (progress_ratio**0.7))
         else:  # 超额达标区
-            early_bonus = EARLY_BONUS * 1.5 * np.exp(-3 * (progress_ratio**0.5))        
+            early_bonus = EARLY_BONUS * 5 * np.exp(-3 * (progress_ratio**0.5))        
         reward += BASE_PROFIT_COEFF * (TARGET_PROFIT + early_bonus + np.log1p(return_ratio - 1))
         done = True
     
@@ -164,7 +188,7 @@ def calculate_reward(
             # 亏损超出死区部分才惩罚
             excess_loss = abs(current_return) - abs(dead_zone_lower)            
             loss_ratio = min(abs(current_return / STOP_LOSS), 4.0)
-            reward -= excess_loss  * 2 * np.sqrt(loss_ratio)
+            reward -= excess_loss  * 10 * np.sqrt(loss_ratio)
         else:
             # 轻微波动：零奖惩（仅保留基础时间惩罚）
             pass                         
@@ -172,7 +196,12 @@ def calculate_reward(
     else:
         # ===== 动态趋势奖励 =====
         momentum = current_return - current_return_base
-        TREND_THRESHOLD = 0.001 * (1 - 0.5*progress_ratio)
+        # print(f'{momentum:.6f}')
+        # TREND_THRESHOLD = 0.0001 * (1 - 0.5*progress_ratio)
+        # TREND_THRESHOLD = 0.0002 if training_steps > 1e6 else 0.0003
+
+        TREND_THRESHOLD = 0.0001 + (training_steps / max_training_steps) * (0.001 - 0.0001)
+        TREND_THRESHOLD = min(0.001 ,TREND_THRESHOLD)
         # 更新趋势连续性 (增加最小变化阈值)
         if momentum > TREND_THRESHOLD:  # 0.1%以上变化才视为趋势
             new_ups += 1
@@ -198,8 +227,8 @@ def calculate_reward(
             # 对数收益率log(1+x)在x接近0时≈x，在x较大时增长变缓，能自动抑制极端惩罚
             # 训练曲线剧烈波动正是需要这种非线性抑制
             # ​​风险控制​​：防止单次大亏损导致奖励值"悬崖式"下降
-            log_return = np.log1p(abs(min(current_return, -0.001)))  # 保证输入>0
-            reward -= BASE_LOSS_COEFF * (log_return + np.log1p(new_downs)/2)  # 双重对数平滑
+            log_return = np.log1p(abs(min(current_return, -0.0005)))  # 保证输入>0
+            reward -= BASE_LOSS_COEFF * (log_return + np.log1p(new_downs) /2)  # 双重对数平滑
             # trend_weakness = min(new_downs/3, 1.0)
             # reward += BASE_LOSS_COEFF * (
             #     current_return  # 价格变动基础惩罚
@@ -216,6 +245,89 @@ def dynamic_feature_last_position_taken(history):
 def dynamic_feature_real_position(history):
     return history['real_position', -1]
 
+def preprocess(df : pd.DataFrame) ->  pd.DataFrame:
+    # if multi_dataset:
+    # df["date"] = pd.to_datetime(df["timestamp"], unit= "ms")
+    df.sort_index(inplace=True)
+    df.dropna(inplace=True)
+    df.drop_duplicates(inplace=True)
+
+    # Generating features
+    # WARNING : the column names need to contain keyword 'feature' !
+    df["feature_close"] = df["close"].pct_change()
+    df["feature_high"] = df["high"].pct_change()
+    df["feature_low"] = df["low"].pct_change()
+    df["feature_volume"] = df["volume"].pct_change()
+    df['dt'] = df.index.date
+    # 2. 获取每日开盘价
+    daily_open = df.groupby('dt')['open'].transform('first')
+    daily_volume = df.groupby('dt')['volume'].transform('first')
+    # 3. 将每日开盘价合并回原始数据框
+    df = df.merge(daily_open.rename('daily_open'),
+                  left_on='date',
+                  right_index=True)
+    df = df.merge(daily_volume.rename('daily_volume'),
+                  left_on='date',
+                  right_index=True)
+    # df['feature_close_open_yoy'] = df['close'] / df['daily_open']
+    # df['feature_high_open_yoy'] = df['high'] / df['daily_open']
+    # df['feature_low_open_yoy'] = df['low'] / df['daily_open']
+    # df['feature_volume_open_yoy'] = df['volume'] / df['daily_volume']
+    # df["feature_volume"] = df["volume"] / df["volume"].rolling(12).max()
+    points_per_day = 48  # 24小时*60分钟/5分钟=288，但实际交易时间可能更少
+    # 滞后特征
+    for lag in [1, points_per_day, points_per_day*5]:  # 1个点前，1天前，5天前
+        df[f'feature_close_lag_{lag}'] = df['close'] / df['close'].shift(lag)
+        df[f'feature_volume_lag_{lag}'] =  df['volume'] / df['volume'].shift(lag)    
+    # df['close_prev'] = df['close'].shift(points_per_day)
+    # df['volume_prev'] = df['volume'].shift(points_per_day)
+    # df['cum_volume'] = df.groupby('dt')['volume'].cumsum()
+    # df['cum_volume_prev'] = df["cum_volume"].shift(points_per_day)
+
+    # df['feature_close_yoy'] = df['close'] / df['close_prev']
+    # df['feature_volume_sum'] = df['cum_volume'] / df['cum_volume_prev']
+    # df = df.drop(columns=['dt', 'daily_open',
+    #              'volume_prev', 'cum_volume', 'cum_volume_prev'])
+    numeric_cols = df.columns
+    for col in numeric_cols:
+        if col.startswith("feature"):
+            df[col] = df[col].round(6)
+    df.dropna(inplace=True)
+    # df.to_csv(f"{symbol}.csv", index=True, encoding='utf_8_sig')
+    return df
+def make_multi_dataset_env(
+    raw_data_dir: str ="../raw_data/pkl/m5",
+    eval: bool = False,
+    window_size: int | None = 24,
+    positions: List[float] = [0, 0.5, 1],
+    trading_fees: float = 0.01/100,  # 0.01% per stock buy / sell
+    portfolio_initial_value: float = 1000000.0,  # in FIAT (here, YMB)
+    max_episode_duration: int | Literal["max"] = 48 * 22,  # "max" ,# 500,
+    target_return: float = 0.15,  # 策略目标收益率，超过视为成功完成，给予高额奖励
+    stop_loss: float = 0.10,  # 止损，低于视为失败，给予惩罚
+    render_mode: Literal["logs", "human"] = "logs",
+    verbose: Literal[0, 1, 2] = 1
+):
+    env = gym.make(
+        "MultiDatasetTradingEnv",
+        dataset_dir= f'{raw_data_dir}/',
+        preprocess= preprocess,
+        initial_position=0,  # 'random', #Initial position
+        reward_function=calculate_reward,
+        # dynamic_feature_functions = [dynamic_feature_last_position_taken, dynamic_feature_real_position],
+        windows=window_size,
+        positions=positions,
+        trading_fees=trading_fees,
+        portfolio_initial_value=portfolio_initial_value,
+        max_episode_duration=max_episode_duration,
+        target_return=target_return,
+        stop_loss=stop_loss,
+        disable_env_checker=True,
+        render_mode=render_mode,
+        verbose=verbose
+    )
+    eval_env = Monitor(env, './eval_logs')
+    return env if not eval else eval_env
 
 def make_env(
     symbol: str,
@@ -230,19 +342,29 @@ def make_env(
     render_mode: Literal["logs", "human"] = "logs",
     verbose: Literal[0, 1, 2] = 1
 ):
-    df = pd.read_csv(
-        f"../raw_data/csv/m5/{symbol}.csv", parse_dates=["date"], index_col="date")
-    df.sort_index(inplace=True)
-    df.dropna(inplace=True)
-    df.drop_duplicates(inplace=True)
+    csv_path = Path("../raw_data/csv/m5") / f"{symbol}.csv"
+    df = pd.read_csv(csv_path, parse_dates=["date"], index_col="date")
+    df = (
+         df.sort_index()
+        .dropna()
+        .drop_duplicates()
+    )
 
-    # Generating features
-    # WARNING : the column names need to contain keyword 'feature' !
-    df["feature_close"] = df["close"].pct_change()
-    df["feature_high"] = df["high"].pct_change()
-    df["feature_low"] = df["low"].pct_change()
-    df["feature_volume"] = df["volume"].pct_change()
-    df['dt'] = df.index.date
+    # 3. 特征工程（收益率特征）
+    df = df.assign(
+        feature_close=df["close"].pct_change(),
+        feature_high=df["high"].pct_change(),
+        feature_low=df["low"].pct_change(),
+        feature_volume=df["volume"].pct_change(),
+        feature_volatility = df["high"] / df["low"] - 1, # 波动率特征
+        dt=df.index.date,  # 日期列（不含时间）
+    ).dropna()  # 删除pct_change引入的NaN
+    # 4. 添加星期和时间列
+    df = df.assign(
+        weekday=df.index.day_name(),  # 星期几（英文，如 "Monday"）
+        feature_weekday=df.index.dayofweek / 5,  # 星期几的数字（0=周一，6=周日）
+        feature_hour=df.index.hour / 24,  # 小时（0-23）
+    )    
     # 2. 获取每日开盘价
     daily_open = df.groupby('dt')['open'].transform('first')
     daily_volume = df.groupby('dt')['volume'].transform('first')

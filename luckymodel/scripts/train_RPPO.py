@@ -213,7 +213,7 @@ if __name__ == "__main__":
     parser.add_argument('--symbol_eval', type=str, default='300308',
                         help='评估使用的股票代码')
 
-    parser.add_argument('--window_size', type=int, default=3)
+    parser.add_argument('--window_size', type=int, default=None)
     parser.add_argument('--target_return', type=float, default=0.05)
     parser.add_argument('--stop_loss', type=float, default=0.2)
     parser.add_argument('--total_timesteps', type=int, default=2e6)

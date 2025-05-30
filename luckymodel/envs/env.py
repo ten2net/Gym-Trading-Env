@@ -90,14 +90,14 @@ def calculate_reward(
     reward = TIME_PENALTY  # 基础时间惩罚
     # 中间奖励（持仓波动率惩罚）
     # volatility_penalty = -0.1 * np.std(history["portfolio_valuation",-10:])  
-    volatility_window=10
-    market_volatility = max(0.00001,np.std(history["price", -20:]))  # 市场基准波动率
-    low_vol_threshold = 0.5 * market_volatility    # 低波动阈值（如0.002~0.008）
-    penalty_coeff = 0.1 / low_vol_threshold  # 系数与阈值反向相关
-    volatility = np.std(history["portfolio_valuation",-volatility_window:]) /np.mean(history["portfolio_valuation",-volatility_window:]) # 相对波动率  
-    if volatility < low_vol_threshold:
-        volatility_penalty = penalty_coeff * (low_vol_threshold - volatility)  # 波动率越低，惩罚越重
-        reward -= volatility_penalty
+    # volatility_window=10
+    # market_volatility = max(0.00001,np.std(history["price", -20:]))  # 市场基准波动率
+    # low_vol_threshold = 0.5 * market_volatility    # 低波动阈值（如0.002~0.008）
+    # penalty_coeff = 0.1 / low_vol_threshold  # 系数与阈值反向相关
+    # volatility = np.std(history["portfolio_valuation",-volatility_window:]) /np.mean(history["portfolio_valuation",-volatility_window:]) # 相对波动率  
+    # if volatility < low_vol_threshold:
+    #     volatility_penalty = penalty_coeff * (low_vol_threshold - volatility)  # 波动率越低，惩罚越重
+    #     reward -= volatility_penalty
         # print(f"{market_volatility} volatility: {volatility}",volatility_penalty)
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT:

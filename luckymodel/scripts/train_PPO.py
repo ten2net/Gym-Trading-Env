@@ -17,6 +17,7 @@ from scripts.utils import RobustCosineSchedule
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RecordEpisodeStatistics
+from stable_baselines3.common.vec_env import SubprocVecEnv
 
 warnings.filterwarnings("ignore", category=ResourceWarning)
 warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is likely shutting down")
@@ -72,7 +73,7 @@ default_config = {
 
     # --- Training Control ---
     'total_timesteps': int(4e6), # Total number of timesteps to train the agent
-    'target_return': 0.05,       # Target return for the training environment's reward function
+    'target_return': 0.02,       # Target return for the training environment's reward function
     'stop_loss': 0.15,           # Stop loss threshold for the training environment
     'eval_stop_loss': 0.1,       # Stop loss threshold for the evaluation environment
 
@@ -93,8 +94,8 @@ default_config = {
     },
     # Entropy Scheduler Callback
     'entropy_scheduler_params': {
-        'initial_value': 0.1, # Initial entropy coefficient
-        'final_value': 0.001,  # Final entropy coefficient (linearly annealed)
+        'initial_value': 0.05, # Initial entropy coefficient
+        'final_value': 0.02,  # Final entropy coefficient (linearly annealed)
     },
     # Parameters for model.learn()
     'model_learn_params':{
@@ -142,7 +143,8 @@ def create_env(symbol: str, common_env_params: dict, target_return: float, stop_
     
     # Wrap the environment with standard wrappers for statistics, vectorization, and normalization
     env = RecordEpisodeStatistics(env)  # Records episode statistics (reward, length)
-    env = DummyVecEnv([lambda: env])    # Converts the environment to a vectorized environment
+    env = DummyVecEnv([lambda: env])  
+    # env = SubprocVecEnv([lambda: env for _ in range(8)])# Converts the environment to a vectorized environment
     env = VecNormalize(env, norm_obs=True, norm_reward=True,clip_reward=5) # Normalizes observations, but not rewards
     
     return env
@@ -210,10 +212,13 @@ def train(config: dict):
         return func   
 
     print(f"Torch CUDA available: {torch.cuda.is_available()}, Using device: {ppo_p['device']}")
-    # Note: `net_arch` could be added to `ppo_params` for custom network architectures.
+    policy_kwargs = dict(
+        net_arch=dict(pi=[256, 256], vf=[256, 256])  # 策略网络和价值网络均为2层256单元
+    )  
     model = PPO(
         "MlpPolicy",  # Standard Multi-Layer Perceptron policy
         train_env,
+        policy_kwargs=policy_kwargs,
         learning_rate=lr_scheduler,  
         n_steps=ppo_p['n_steps'],          # Number of steps per environment per update
         batch_size=ppo_p['batch_size'],    # Minibatch size
@@ -233,10 +238,10 @@ def train(config: dict):
 
     # Entropy Scheduler Callback: Dynamically adjusts the entropy coefficient during training.
     entropy_p = config['entropy_scheduler_params']
-    active_callbacks.append(EntropyScheduler(
-        initial_value=entropy_p['initial_value'], 
-        final_value=entropy_p['final_value']
-    ))
+    # active_callbacks.append(EntropyScheduler(
+    #     initial_value=entropy_p['initial_value'], 
+    #     final_value=entropy_p['final_value']
+    # ))
 
     # Profit Curriculum Callback: (Assumed to implement a curriculum learning strategy based on profit)
     # 自定义参数（从0.03到0.15，在3e6步内线性增长）

@@ -33,6 +33,7 @@ class ProfitCurriculumCallback(BaseCallback):
         self.current_ent_coef = ent_coef_initial
 
     def _on_step(self) -> bool:
+        self.logger.record("train/ent_coef", self.model.ent_coef)
         warmup_steps = 3e5  # 前30万步高频率更新，这种设计更符合 "先稳后优" 的强化学习调参哲学，能有效平衡探索与利用的矛盾。
         if self.model.num_timesteps < warmup_steps:
             update_interval = 10000
@@ -51,29 +52,20 @@ class ProfitCurriculumCallback(BaseCallback):
         # else:
         #     new_target = self.final_target
         # new_target = max(self.initial_target, min(self.final_target, new_target))
-        # 每 500k 步提升一次目标值  若目标值（target_return）线性增长过快，策略可能无法适应。
-        # 因此，我们将其限制在 0.03 到 0.15 之间，并在每个阶段增加 0.03。
+        # 每 200k 步提升一次目标值  若目标值（target_return）线性增长过快，策略可能无法适应。
+        # 因此，我们将其限制在 0.02 到 0.12 之间，并在每个阶段增加 0.005。
         # 将线性增长改为 ​​分段阶梯式提升​​，每阶段预留足够训练步数：
-        stage = min(int(total_steps // 4e5), 10)  # 0~9 共10个阶段
-        new_target = self.initial_target + stage * 0.01  # 每阶段增加0.01
+        stage = min(int(total_steps // 2e5), 20)  # 0~9 共10个阶段
+        new_target = self.initial_target + stage * 0.005  # 每阶段增加0.01
         new_target = min(new_target, self.final_target)        
         
-        # 检测难度提升（目标值增加超过1%）
-        target_abs_increase = new_target - self.last_target
-        target_increase = target_abs_increase / self.last_target #相对幅度
-        # if target_increase > 0.01:
-        if target_abs_increase > 0.005:  # 绝对增幅触发，
-            # 恢复熵系数到初始值的指定比例（如50%）
-            max_restore_ratio = 1.0  # 允许恢复到初始值，但不超过
-            restore_ratio = self.ent_coef_restore_ratio + 0.3 * target_increase  # 目标值增幅越大，恢复比例越高
-            restore_ratio = min(restore_ratio, max_restore_ratio)
-
-            self.current_ent_coef = max(
-                self.ent_coef_min,
-                self.ent_coef_initial * restore_ratio
-            )
-            self.model.ent_coef = self.current_ent_coef
-            self.logger.record("train/ent_coef", self.current_ent_coef)
+        # 检测难度提升调整熵系数
+        self.current_ent_coef = min(
+            0.1,
+            self.ent_coef_initial + stage * 0.005
+        )        
+        self.model.ent_coef =  self.current_ent_coef
+        self.logger.record("train/ent_coef", self.current_ent_coef)
         
         # 更新环境目标值
         for env_idx in range(self.training_env.num_envs):

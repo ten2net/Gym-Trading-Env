@@ -245,20 +245,37 @@ def dynamic_feature_last_position_taken(history):
 def dynamic_feature_real_position(history):
     return history['real_position', -1]
 
-def preprocess(df : pd.DataFrame) ->  pd.DataFrame:
-    # if multi_dataset:
-    # df["date"] = pd.to_datetime(df["timestamp"], unit= "ms")
-    df.sort_index(inplace=True)
-    df.dropna(inplace=True)
-    df.drop_duplicates(inplace=True)
+def preprocess(df : pd.DataFrame,window_size=None) ->  pd.DataFrame:
+    df = (
+         df.sort_index()
+        .dropna()
+        .drop_duplicates()
+    )
+    
+    df['yestday_close'] = (
+        df['close'].resample('D').last()  # 获取每日收盘价
+        .shift()                         # 前一日收盘价
+        .reindex(df.index, method='ffill')  # 填充到所有bar
+    )
 
-    # Generating features
-    # WARNING : the column names need to contain keyword 'feature' !
-    df["feature_close"] = df["close"].pct_change()
-    df["feature_high"] = df["high"].pct_change()
-    df["feature_low"] = df["low"].pct_change()
-    df["feature_volume"] = df["volume"].pct_change()
-    df['dt'] = df.index.date
+    # 填充首日
+    if df['yestday_close'].isna().any():
+        first_day = df.index.min().date()
+        df.loc[df.index.date == first_day, 'yestday_close'] = df.loc[df.index.date == first_day, 'open'].iloc[0]
+        
+    # 3. 特征工程（收益率特征）
+    df = df.assign(
+        feature_close=100 * (df['close'] - df['yestday_close']) / df['yestday_close'],
+        feature_open=100 * (df['open'] - df['yestday_close']) / df['yestday_close'],
+        feature_high=100 * (df['high'] - df['yestday_close']) / df['yestday_close'],
+        feature_low=100 * (df['low'] - df['yestday_close']) / df['yestday_close'],
+        feature_volatility =100 *  (df["high"] / df["low"] - 1), # 波动率特征
+        dt=df.index.date,  # 日期列（不含时间）
+    ).dropna()  # 删除pct_change引入的NaN
+    # 4. 添加时间特征
+    fe = FeatureEngineer(window_size=window_size)
+    df = fe.time_features(df,key_feature_only=True)    
+
     # 2. 获取每日开盘价
     daily_open = df.groupby('dt')['open'].transform('first')
     daily_volume = df.groupby('dt')['volume'].transform('first')
@@ -269,31 +286,22 @@ def preprocess(df : pd.DataFrame) ->  pd.DataFrame:
     df = df.merge(daily_volume.rename('daily_volume'),
                   left_on='date',
                   right_index=True)
-    # df['feature_close_open_yoy'] = df['close'] / df['daily_open']
-    # df['feature_high_open_yoy'] = df['high'] / df['daily_open']
-    # df['feature_low_open_yoy'] = df['low'] / df['daily_open']
-    # df['feature_volume_open_yoy'] = df['volume'] / df['daily_volume']
-    # df["feature_volume"] = df["volume"] / df["volume"].rolling(12).max()
-    points_per_day = 48  # 24小时*60分钟/5分钟=288，但实际交易时间可能更少
+    df['feature_close_open_yoy'] =100 * (df['close'] / df['daily_open'] - 1)
+    df['feature_volume_open_yoy'] = df['volume'] / df['daily_volume']
+    points_per_day = 48  
     # 滞后特征
-    for lag in [1, points_per_day, points_per_day*5]:  # 1个点前，1天前，5天前
+    for lag in [1, points_per_day]:  # 1个点前，1天前，5天前
         df[f'feature_close_lag_{lag}'] = df['close'] / df['close'].shift(lag)
         df[f'feature_volume_lag_{lag}'] =  df['volume'] / df['volume'].shift(lag)    
-    # df['close_prev'] = df['close'].shift(points_per_day)
-    # df['volume_prev'] = df['volume'].shift(points_per_day)
-    # df['cum_volume'] = df.groupby('dt')['volume'].cumsum()
-    # df['cum_volume_prev'] = df["cum_volume"].shift(points_per_day)
-
-    # df['feature_close_yoy'] = df['close'] / df['close_prev']
-    # df['feature_volume_sum'] = df['cum_volume'] / df['cum_volume_prev']
-    # df = df.drop(columns=['dt', 'daily_open',
-    #              'volume_prev', 'cum_volume', 'cum_volume_prev'])
+    df = df.drop(columns=['dt', 'daily_open','daily_volume'])
+    # print(df[-50:])
+    # fe = FeatureEngineer(window_size=window_size)
+    # df = fe.compute_features(df)
     numeric_cols = df.columns
     for col in numeric_cols:
         if col.startswith("feature"):
             df[col] = df[col].round(6)
-    df.dropna(inplace=True)
-    # df.to_csv(f"{symbol}.csv", index=True, encoding='utf_8_sig')
+    df.dropna(inplace=True)    
     return df
 def make_multi_dataset_env(
     raw_data_dir: str ="../raw_data/pkl/m5",
@@ -344,64 +352,7 @@ def make_env(
 ):
     csv_path = Path("../raw_data/csv/m5") / f"{symbol}.csv"
     df = pd.read_csv(csv_path, parse_dates=["date"], index_col="date")
-    df = (
-         df.sort_index()
-        .dropna()
-        .drop_duplicates()
-    )
-
-    # 3. 特征工程（收益率特征）
-    df = df.assign(
-        feature_close=df["close"].pct_change(),
-        feature_high=df["high"].pct_change(),
-        feature_low=df["low"].pct_change(),
-        feature_volume=df["volume"].pct_change(),
-        feature_volatility = df["high"] / df["low"] - 1, # 波动率特征
-        dt=df.index.date,  # 日期列（不含时间）
-    ).dropna()  # 删除pct_change引入的NaN
-    # 4. 添加星期和时间列
-    df = df.assign(
-        weekday=df.index.day_name(),  # 星期几（英文，如 "Monday"）
-        feature_weekday=df.index.dayofweek / 5,  # 星期几的数字（0=周一，6=周日）
-        feature_hour=df.index.hour / 24,  # 小时（0-23）
-    )    
-    # 2. 获取每日开盘价
-    daily_open = df.groupby('dt')['open'].transform('first')
-    daily_volume = df.groupby('dt')['volume'].transform('first')
-    # 3. 将每日开盘价合并回原始数据框
-    df = df.merge(daily_open.rename('daily_open'),
-                  left_on='date',
-                  right_index=True)
-    df = df.merge(daily_volume.rename('daily_volume'),
-                  left_on='date',
-                  right_index=True)
-    df['feature_close_open_yoy'] = df['close'] / df['daily_open']
-    df['feature_high_open_yoy'] = df['high'] / df['daily_open']
-    df['feature_low_open_yoy'] = df['low'] / df['daily_open']
-    df['feature_volume_open_yoy'] = df['volume'] / df['daily_volume']
-    # df["feature_volume"] = df["volume"] / df["volume"].rolling(12).max()
-    points_per_day = 48  # 24小时*60分钟/5分钟=288，但实际交易时间可能更少
-    # 滞后特征
-    for lag in [1, points_per_day, points_per_day*5]:  # 1个点前，1天前，5天前
-        df[f'feature_close_lag_{lag}'] = df['close'] / df['close'].shift(lag)
-        df[f'feature_volume_lag_{lag}'] =  df['volume'] / df['volume'].shift(lag)    
-    df['close_prev'] = df['close'].shift(points_per_day)
-    df['volume_prev'] = df['volume'].shift(points_per_day)
-    df['cum_volume'] = df.groupby('dt')['volume'].cumsum()
-    df['cum_volume_prev'] = df["cum_volume"].shift(points_per_day)
-
-    df['feature_close_yoy'] = df['close'] / df['close_prev']
-    df['feature_volume_sum'] = df['cum_volume'] / df['cum_volume_prev']
-    df = df.drop(columns=['dt', 'daily_open',
-                 'volume_prev', 'cum_volume', 'cum_volume_prev'])
-    # print(df[-50:])
-    # fe = FeatureEngineer(window_size=window_size)
-    # df = fe.compute_features(df)
-    numeric_cols = df.columns
-    for col in numeric_cols:
-        if col.startswith("feature"):
-            df[col] = df[col].round(6)
-    df.dropna(inplace=True)
+    df =preprocess(df,window_size=None)
     df.to_csv(f"{symbol}.csv", index=True, encoding='utf_8_sig')
     env = gym.make(
         "TradingEnv",

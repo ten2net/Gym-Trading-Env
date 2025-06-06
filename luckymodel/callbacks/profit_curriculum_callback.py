@@ -53,16 +53,16 @@ class ProfitCurriculumCallback(BaseCallback):
         #     new_target = self.final_target
         # new_target = max(self.initial_target, min(self.final_target, new_target))
         # 每 200k 步提升一次目标值  若目标值（target_return）线性增长过快，策略可能无法适应。
-        # 因此，我们将其限制在 0.02 到 0.12 之间，并在每个阶段增加 0.005。
+        # 因此，我们将其限制在 0.02 到 0.1 之间，并在每个阶段增加 0.004。
         # 将线性增长改为 ​​分段阶梯式提升​​，每阶段预留足够训练步数：
         stage = min(int(total_steps // 2e5), 20)  # 0~9 共10个阶段
-        new_target = self.initial_target + stage * 0.005  # 每阶段增加0.01
+        new_target = self.initial_target + stage * 0.004  # 每阶段增加0.004
         new_target = min(new_target, self.final_target)        
         
         # 检测难度提升调整熵系数
         self.current_ent_coef = min(
             0.1,
-            self.ent_coef_initial + stage * 0.005
+            self.ent_coef_initial + stage * 0.004
         )        
         self.model.ent_coef =  self.current_ent_coef
         self.logger.record("train/ent_coef", self.current_ent_coef)

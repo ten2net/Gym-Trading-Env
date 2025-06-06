@@ -185,7 +185,7 @@ class TradingEnv(gym.Env):
         )
         self._update_history()
 
-        return self._get_obs(), {}
+        return self._get_obs(), self.history[-1]
 
     def _init_portfolio(self):
         self._position = (np.random.choice(self.positions)

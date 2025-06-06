@@ -72,16 +72,16 @@ def evaluate_model(env, model, num_episodes=1000):
         done = False
         truncated = False
 
-        while not done and not truncated:
+        while not done :
             action, _ = model.predict(obs, deterministic=False)
             # obs, _, done, truncated, info = env.step(action)
             obs, _, done,  info = env.step(action)
-            # print(info)
+            # print(info[0])
             done=done[0]
             episode_returns.append(info[0]['portfolio_valuation'])
             truncated =info[0]['truncated']
             # print(done, truncated)
-            # if truncated or done:
+            # if truncated :
             #   obs = env.reset() 
 
         # 计算各项指标
@@ -97,6 +97,9 @@ def evaluate_model(env, model, num_episodes=1000):
         'mean_sharpe': np.mean([m['sharpe_ratio'] for m in metrics]),
         'max_drawdown': np.max([m['max_drawdown'] for m in metrics]),
         'avg_return': np.mean([m['total_return'] for m in metrics]),
+        'median_return': np.median([m['total_return'] for m in metrics]),
+        'max_return': np.max([m['total_return'] for m in metrics]),
+        'min_return': np.min([m['total_return'] for m in metrics]),
         'cumulative_returns': all_returns
     }
 
@@ -130,7 +133,7 @@ if __name__ == "__main__":
         'trading_fees': 0.01/100,
         'portfolio_initial_value': 1000000.0,
         'max_episode_duration': 48 * 10,
-        'target_return': 0.05,
+        'target_return': 0.02,
         'stop_loss': 0.1,
         'render_mode': "logs",
         'verbose': 0
@@ -148,15 +151,15 @@ if __name__ == "__main__":
 
     # 加载训练好的模型
     # model = RecurrentPPO.load("./rppo_trading_model_20250503_1401.zip")
-    model = PPO.load("./rppo_trading_model_20250523_1334.zip",device='cpu')
+    model = PPO.load("./rppo_trading_model_20250606_1340.zip",device='cpu')
     print(model.policy)
     
-    def evaluate_by_initial_conditions(model, env, n_conditions=5):
+    def evaluate_by_initial_conditions(model, env, n_conditions=10):
         for seed in range(n_conditions):
             env.seed(seed)
-            mean_reward, std_reward= evaluate_policy(model, env, n_eval_episodes=5, deterministic=True)
+            mean_reward, std_reward= evaluate_policy(model, env, n_eval_episodes=30, deterministic=True)
             print(f"Seed {seed}: {mean_reward:.2f} +/- {std_reward:.2f}")    
-    evaluate_by_initial_conditions(model, env, n_conditions=5)
+    evaluate_by_initial_conditions(model, env, n_conditions=10)
     mean_reward, std_reward = evaluate_policy(
         model, 
         env, 
@@ -164,16 +167,19 @@ if __name__ == "__main__":
         deterministic=True)
     print(f"Mean reward: {mean_reward} +/- {std_reward}")
     
-    for seed in range(5):    
+    for seed in range(10):    
         # 执行评估
-        env.seed(seed)
-        results = evaluate_model(env, model, num_episodes=5)
+        env.seed(seed+40)
+        results = evaluate_model(env, model, num_episodes=10)
 
         # 输出评估报告
         print(f"\n=== 评估结果 (种子: {seed}) ===")
         print(f"平均夏普比率: {results['mean_sharpe']:.2f}")
         print(f"最大回撤: {results['max_drawdown']:.2%}")
         print(f"平均总收益: {results['avg_return']:.2%}")
+        print(f"中位总收益: {results['median_return']:.2%}")
+        print(f"最大总收益: {results['max_return']:.2%}")
+        print(f"最小总收益: {results['min_return']:.2%}")
 
     # 可视化净值曲线
-    # plot_portfolio_results(results['cumulative_returns'])
+    plot_portfolio_results(results['cumulative_returns'])

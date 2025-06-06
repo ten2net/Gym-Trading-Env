@@ -227,10 +227,6 @@ class FeatureEngineer:
         time_features = encode_time_features(df.index, market_type='A')
         prepare_time_features=prepare_time_features_for_rl(time_features)
         if key_feature_only:
-            #    essential_time_features = [
-            #     'trading_progress', 'opening_effect', 'closing_effect',
-            #     'hour_sin', 'hour_cos', 'is_closing'
-            #     ] 
            essential_time_features = [
                 'hour_sin', 'hour_cos',             # 周期编码
                 'minute_sin', 'minute_cos',         # 高频周期
@@ -239,7 +235,7 @@ class FeatureEngineer:
                 'is_opening', 'is_closing',         # 关键时段
                 'opening_effect', 'closing_effect'  # 非线性效应
             ]           
-           prepare_time_features = prepare_time_features[essential_time_features].copy()
+        prepare_time_features = prepare_time_features[essential_time_features].copy()
         new_columns = {col: f"feature_{col}" for col in prepare_time_features.columns}
         prepare_time_features = prepare_time_features.rename(columns=new_columns)
         

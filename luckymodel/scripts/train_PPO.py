@@ -17,6 +17,7 @@ from scripts.utils import RobustCosineSchedule
 import torch
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from gymnasium.wrappers import RecordEpisodeStatistics
+from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 warnings.filterwarnings("ignore", category=ResourceWarning)
@@ -27,8 +28,8 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 # These values can be overridden by command-line arguments.
 default_config = {
     # --- Data and Symbols ---
-    # 'symbol_train': '300059',  # Stock symbol for training
-    'symbol_train': '300520',  # Stock symbol for training
+    'symbol_train': '300059',  # Stock symbol for training
+    # 'symbol_train': '300520',  # Stock symbol for training
     'symbol_eval': '300308',   # Stock symbol for evaluation
 
     # --- Learning Rate Schedule ---
@@ -40,13 +41,13 @@ default_config = {
 
     # --- PPO Algorithm Parameters ---
     'ppo_params': {
-        'n_steps': 1024,          # Number of steps to run for each environment per update
-        'batch_size': 512,        # Minibatch size for PPO updates
+        'n_steps': 288,          # Number of steps to run for each environment per update, 6天数据(48 bars/day × 6)
+        'batch_size': 32,        # Minibatch size for PPO updates
         'n_epochs': 10,           # Number of epochs when optimizing the surrogate loss
-        'clip_range_initial': 0.2,# Initial clipping parameter for PPO
-        'clip_range_final': 0.15,  # Final clipping parameter (linearly annealed)
+        'clip_range_initial': 0.1,# Initial clipping parameter for PPO
+        'clip_range_final': 0.05,  # Final clipping parameter (linearly annealed)
         'ent_coef': 0.05,         # Entropy coefficient for exploration
-        'gamma': 0.97,            # Discount factor for future rewards
+        'gamma': 0.92,            # Discount factor for future rewards
         'device': "cpu",          # Device to use for training ('cpu' or 'cuda')
         'seed': 42,               # Random seed for reproducibility
     },
@@ -58,7 +59,7 @@ default_config = {
         'positions': [0, 0.5, 1],  # Allowed positions (e.g., short, neutral, long)
         'trading_fees': 0.01/100,  # Percentage trading fee
         'portfolio_initial_value': 1000000, # Initial portfolio value
-        'max_episode_duration': 48 * 10,    # Max steps per episode
+        'max_episode_duration': 480,    # Max steps per episode
         'render_mode': "logs",     # Environment render mode
         'verbose': 0,              # Environment verbosity level
     },
@@ -68,19 +69,19 @@ default_config = {
         'tensorboard_log_dir': "../logs/stock_trading2/", # Directory for TensorBoard logs
         'best_model_save_path': "../checkpoints/best_models/", # Directory to save best models during evaluation
         'model_save_prefix': "rppo_trading_model",       # Prefix for final saved model filename
-        'tb_log_name': "ppo_300308",                 # Name for the TensorBoard log run
+        'tb_log_name': "ppo_300059",                 # Name for the TensorBoard log run
     },
 
     # --- Training Control ---
     'total_timesteps': int(4e6), # Total number of timesteps to train the agent
     'target_return': 0.02,       # Target return for the training environment's reward function
-    'stop_loss': 0.15,           # Stop loss threshold for the training environment
+    'stop_loss': 0.1,           # Stop loss threshold for the training environment
     'eval_stop_loss': 0.1,       # Stop loss threshold for the evaluation environment
 
     # --- Callback Configurations ---
     # Evaluation Callback (integrates Early Stopping)
     'eval_callback_params': {
-        'eval_freq': 48 * 22,        # How_often to perform evaluation (in steps)
+        'eval_freq': 48 * 10,        # How_often to perform evaluation (in steps)
         'n_eval_episodes': 10000,    # Number of episodes to run for evaluation
         'verbose': 0,                # Verbosity level for evaluation callback
         'deterministic': True,       # Whether to use deterministic actions for evaluation
@@ -143,9 +144,9 @@ def create_env(symbol: str, common_env_params: dict, target_return: float, stop_
     
     # Wrap the environment with standard wrappers for statistics, vectorization, and normalization
     env = RecordEpisodeStatistics(env)  # Records episode statistics (reward, length)
-    env = DummyVecEnv([lambda: env])  
-    # env = SubprocVecEnv([lambda: env for _ in range(8)])# Converts the environment to a vectorized environment
-    env = VecNormalize(env, norm_obs=True, norm_reward=True,clip_reward=5) # Normalizes observations, but not rewards
+    env = DummyVecEnv([lambda: env]) 
+     # env = SubprocVecEnv([lambda: env for _ in range(8)])# Converts the environment to a vectorized environment
+    # env = VecNormalize(env, norm_obs=True, norm_reward=False,clip_reward=10) # Normalizes observations, but not rewards
     
     return env
 

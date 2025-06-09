@@ -147,30 +147,31 @@ if __name__ == "__main__":
     # 创建环境并包装为 VecNormalize
     base_env = RecordEpisodeStatistics(env)  # 关键步骤！
     env = DummyVecEnv([lambda: base_env])
-    env = VecNormalize(env, norm_obs=True, norm_reward=False)      
+    # env = VecNormalize(env, norm_obs=True, norm_reward=False)      
 
     # 加载训练好的模型
     # model = RecurrentPPO.load("./rppo_trading_model_20250503_1401.zip")
-    model = PPO.load("./rppo_trading_model_20250606_1340.zip",device='cpu')
+    # model = PPO.load("./rppo_trading_model_20250609_1251.zip",device='cpu')
+    model = PPO.load("./rppo_trading_model_20250609_1806.zip",device='cpu')
     print(model.policy)
     
-    def evaluate_by_initial_conditions(model, env, n_conditions=10):
-        for seed in range(n_conditions):
-            env.seed(seed)
-            mean_reward, std_reward= evaluate_policy(model, env, n_eval_episodes=30, deterministic=True)
-            print(f"Seed {seed}: {mean_reward:.2f} +/- {std_reward:.2f}")    
-    evaluate_by_initial_conditions(model, env, n_conditions=10)
-    mean_reward, std_reward = evaluate_policy(
-        model, 
-        env, 
-        n_eval_episodes=10,
-        deterministic=True)
-    print(f"Mean reward: {mean_reward} +/- {std_reward}")
+    # def evaluate_by_initial_conditions(model, env, n_conditions=10):
+    #     for seed in range(n_conditions):
+    #         env.seed(seed)
+    #         mean_reward, std_reward= evaluate_policy(model, env, n_eval_episodes=30, deterministic=True)
+    #         print(f"Seed {seed}: {mean_reward:.2f} +/- {std_reward:.2f}")    
+    # evaluate_by_initial_conditions(model, env, n_conditions=10)
+    # mean_reward, std_reward = evaluate_policy(
+    #     model, 
+    #     env, 
+    #     n_eval_episodes=10,
+    #     deterministic=True)
+    # print(f"Mean reward: {mean_reward} +/- {std_reward}")
     
     for seed in range(10):    
         # 执行评估
         env.seed(seed+40)
-        results = evaluate_model(env, model, num_episodes=10)
+        results = evaluate_model(env, model, num_episodes=100)
 
         # 输出评估报告
         print(f"\n=== 评估结果 (种子: {seed}) ===")

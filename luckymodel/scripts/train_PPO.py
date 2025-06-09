@@ -28,24 +28,24 @@ warnings.filterwarnings("ignore", message="sys.meta_path is None, Python is like
 # These values can be overridden by command-line arguments.
 default_config = {
     # --- Data and Symbols ---
-    'symbol_train': '300059',  # Stock symbol for training
+    'symbol_train': '300308',  # Stock symbol for training
     # 'symbol_train': '300520',  # Stock symbol for training
     'symbol_eval': '300308',   # Stock symbol for evaluation
 
     # --- Learning Rate Schedule ---
     'learning_rate_schedule_params': {
-        'initial_lr': 2e-5,    # Starting learning rate
-        'final_lr': 2e-4,      # Peak learning rate after warmup
+        'initial_lr': 5e-5,    # Starting learning rate
+        'final_lr': 5e-4,      # Peak learning rate after warmup
         'warmup_ratio': 0.1,  # Proportion of total steps for linear warmup
     },
 
     # --- PPO Algorithm Parameters ---
     'ppo_params': {
-        'n_steps': 288,          # Number of steps to run for each environment per update, 6天数据(48 bars/day × 6)
-        'batch_size': 32,        # Minibatch size for PPO updates
+        'n_steps': 240,          # Number of steps to run for each environment per update, 6天数据(48 bars/day × 6)
+        'batch_size': 60,        # Minibatch size for PPO updates
         'n_epochs': 10,           # Number of epochs when optimizing the surrogate loss
-        'clip_range_initial': 0.1,# Initial clipping parameter for PPO
-        'clip_range_final': 0.05,  # Final clipping parameter (linearly annealed)
+        'clip_range_initial': 0.2,# Initial clipping parameter for PPO
+        'clip_range_final': 0.15,  # Final clipping parameter (linearly annealed)
         'ent_coef': 0.05,         # Entropy coefficient for exploration
         'gamma': 0.92,            # Discount factor for future rewards
         'device': "cpu",          # Device to use for training ('cpu' or 'cuda')

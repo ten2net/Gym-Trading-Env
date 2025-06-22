@@ -19,13 +19,16 @@ def calculate_reward(
     history,
     current_price: float,
     current_value: float,
+    current_max_drawdown: float,  # 新增: 当前最大回撤值(负数)
     step: int = 0,
     max_steps: int = 480,
     target_profit: float = 0.15,
     stop_loss: float = 0.1,
     consecutive_ups: int = 0,
     consecutive_downs: int = 0,
-    training_steps: int = 0
+    training_steps: int = 0,
+    max_drawdown_threshold: float = 0.2,  # 新增: 最大回撤阈值(20%)
+    
 ) -> tuple[float, bool, bool, int, int]:
     """
     强化学习交易策略的奖励计算函数
@@ -52,6 +55,7 @@ def calculate_reward(
     """
     TARGET_PROFIT = np.log(1 + target_profit)
     STOP_LOSS = np.log(1 - stop_loss)
+    MAX_DRAWDOWN = -abs(max_drawdown_threshold)  # 确保为负
     
     prev_price = float(history["price", -1])
     prev_value = float(history["portfolio_valuation", -1])
@@ -99,6 +103,30 @@ def calculate_reward(
     #     volatility_penalty = penalty_coeff * (low_vol_threshold - volatility)  # 波动率越低，惩罚越重
     #     reward -= volatility_penalty
         # print(f"{market_volatility} volatility: {volatility}",volatility_penalty)
+    # ============= 新增: 最大回撤控制机制 =============
+    # 1. 动态回撤阈值 - 随着训练进展收紧标准
+    dynamic_factor = 0.7 + 0.3*(training_steps/max_training_steps)  
+    DRAWDOWN_THRESHOLD = MAX_DRAWDOWN * dynamic_factor
+    
+    # 2. 实时回撤惩罚
+    if current_max_drawdown < DRAWDOWN_THRESHOLD:
+        # 非线性惩罚 - 惩罚强度随回撤增大而增强.np.sqrt()：非线性惩罚（小回撤轻罚，大回撤重罚）,平方根函数：避免小回撤时过度干预
+        drawdown_ratio = abs(current_max_drawdown)/abs(MAX_DRAWDOWN)
+        drawdown_penalty = -np.sqrt(drawdown_ratio) * BASE_LOSS_COEFF
+        # 添加惩罚到基础奖励
+        reward += drawdown_penalty
+        
+        # 预警机制（回撤达到硬止损的80%~95%时）
+        if 0.8 <= drawdown_ratio < 0.95:
+            reward -= abs(current_max_drawdown) * 2  # 追加线性惩罚
+    
+    # 3. 硬止损 - 最大回撤超过阈值
+    if abs(current_max_drawdown) >= abs(MAX_DRAWDOWN):
+        loss_severity = min(drawdown_ratio**1.5, 3.0)
+        reward += MAX_DRAWDOWN * loss_severity * BASE_LOSS_COEFF
+        done = True
+        return reward, done, truncated, new_ups, new_downs
+    # ============= 最大回撤控制机制结束 =============        
     # 情况1：达到目标收益
     if current_return >= TARGET_PROFIT:
         # 提前完成奖励 = 基础奖励 + 提前完成奖励(指数衰减)

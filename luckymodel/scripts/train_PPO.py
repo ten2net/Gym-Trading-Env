@@ -34,8 +34,8 @@ default_config = {
 
     # --- Learning Rate Schedule ---
     'learning_rate_schedule_params': {
-        'initial_lr': 5e-5,    # Starting learning rate
-        'final_lr': 5e-4,      # Peak learning rate after warmup
+        'initial_lr': 3e-5,    # Starting learning rate
+        'final_lr': 1e-4,      # Peak learning rate after warmup
         'warmup_ratio': 0.1,  # Proportion of total steps for linear warmup
     },
 

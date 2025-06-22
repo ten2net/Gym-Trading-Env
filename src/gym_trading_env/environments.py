@@ -27,6 +27,10 @@ def dynamic_feature_step_progress(history):
 def dynamic_feature_portfolio_return(history):
     return history['portfolio_return', -1]
 
+def calculate_drawdown(values):
+    """计算最大回撤"""
+    peak = np.maximum.accumulate(values)
+    return np.min((values - peak) / peak)
 
 class TradingEnv(gym.Env):
     metadata = {'render_modes': ['human', 'logs'], 'render_fps': 10}
@@ -88,6 +92,7 @@ class TradingEnv(gym.Env):
         self.target_return = params['target_return']
         self.stop_loss = params['stop_loss']
         self.training_steps = 0
+        self.historical_max_drawdown = 0
 
         self.log_metrics = []
 
@@ -153,6 +158,7 @@ class TradingEnv(gym.Env):
         self._termination_reason = ""
         self.consecutive_ups = 0 # 趋势持续时间计数器，用于添加趋势持续时间奖励
         self.consecutive_downs = 0 # 趋势持续时间计数器，用于添加趋势持续时间奖励
+        self.historical_max_drawdown = 0
 
         # 初始化投资组合
         self._init_portfolio()
@@ -239,7 +245,10 @@ class TradingEnv(gym.Env):
 
         # 在更新历史记录前检查终止状态
         # self._check_termination()
-
+        # 计算当前回撤
+        current_drawdown = calculate_drawdown(self.history['portfolio_valuation'])
+        # 更新历史最大回撤
+        self.historical_max_drawdown = min(self.historical_max_drawdown, current_drawdown)
         # 在更新历史记录前计算奖励
         reward = self._calculate_reward()
 
@@ -274,6 +283,7 @@ class TradingEnv(gym.Env):
             history=self.history,
             current_price = current_price,
             current_value = current_value, 
+            current_max_drawdown=self.historical_max_drawdown,
             step = step, 
             max_steps = max_steps,
             target_profit=self.target_return,
